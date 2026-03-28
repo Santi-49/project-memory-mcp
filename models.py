@@ -82,6 +82,8 @@ class FolderManifest(BaseModel):
 
     last_updated: str
     stale: bool = False
+    description: Optional[str] = None
+    last_entry_date: Optional[str] = None
     files: list[ManifestEntry] = []
 
     @field_validator("last_updated")

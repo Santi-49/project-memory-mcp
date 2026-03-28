@@ -28,13 +28,15 @@ from models import (
     RootManifestEntry,
 )
 from templates import (
+    COMPANY_TEMPLATE,
     EMPTY_MANIFEST,
     KNOWLEDGE_ENTRY_TEMPLATE,
     PERSON_TEMPLATE,
-    COMPANY_TEMPLATE,
     PROJECT_GUIDE_TEMPLATE,
     PROJECT_META_TEMPLATE,
+    PROJECT_STATUS_TEMPLATE,
     ROOT_MANIFEST_TEMPLATE,
+    UPDATES_MANIFEST_TEMPLATE,
 )
 
 _KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -99,6 +101,11 @@ def is_append_only(path: Path) -> bool:
 def is_manifest(path: Path) -> bool:
     """Return True if path is a _index.yaml (protected from direct write)."""
     return path.name == "_index.yaml"
+
+
+def is_updates_folder(folder: Path) -> bool:
+    """Return True if folder is an updates/ subdirectory."""
+    return folder.name == "updates"
 
 
 def parse_refs(content: str) -> dict[str, list[str]]:
@@ -286,6 +293,8 @@ class MemoryFS:
         return FolderManifest(
             last_updated=raw.get("last_updated", _today()),
             stale=raw.get("stale", False),
+            description=raw.get("description"),
+            last_entry_date=raw.get("last_entry_date"),
             files=[ManifestEntry(**f) for f in raw.get("files", [])],
         )
 
@@ -294,8 +303,12 @@ class MemoryFS:
         data: dict[str, Any] = {
             "last_updated": manifest.last_updated,
             "stale": manifest.stale,
-            "files": [e.model_dump() for e in manifest.files],
         }
+        if manifest.description is not None:
+            data["description"] = manifest.description
+        if manifest.last_entry_date is not None:
+            data["last_entry_date"] = manifest.last_entry_date
+        data["files"] = [e.model_dump() for e in manifest.files]
         header = "# Auto-managed by the MCP server. Edit descriptions via update_file_description tool.\n"
         manifest_path.write_text(
             header + yaml.dump(data, default_flow_style=False, allow_unicode=True),
@@ -331,6 +344,16 @@ class MemoryFS:
     def rebuild_manifest(self, folder: Path) -> FolderManifest:
         """Scan folder, add missing entries, remove entries for deleted files."""
         manifest = self.load_manifest(folder)
+
+        # updates/ folders use a summary-only convention — no per-file tracking
+        if is_updates_folder(folder):
+            manifest.last_updated = _today()
+            manifest.stale = False
+            if not manifest.description:
+                manifest.description = "Chronological update log. Read the file directly for recent entries."
+            self.save_manifest(folder, manifest)
+            return manifest
+
         existing_names = {e.name for e in manifest.files}
 
         # Add missing entries
@@ -364,8 +387,12 @@ class MemoryFS:
             f"## Folder Manifest: {rel}",
             f"Last updated: {manifest.last_updated}",
             f"Stale: {manifest.stale}",
-            "",
         ]
+        if manifest.description:
+            lines.append(f"Description: {manifest.description}")
+        if manifest.last_entry_date:
+            lines.append(f"Last entry date: {manifest.last_entry_date}")
+        lines.append("")
         if not manifest.files:
             lines.append("_(no files indexed)_")
         else:
@@ -429,11 +456,21 @@ class MemoryFS:
 
         # _index.yaml skeletons
         for sub in sub_folders:
-            (project_dir / sub / "_index.yaml").write_text(
-                EMPTY_MANIFEST.format(date=today), encoding="utf-8"
-            )
+            if sub == "updates":
+                (project_dir / sub / "_index.yaml").write_text(
+                    UPDATES_MANIFEST_TEMPLATE.format(date=today), encoding="utf-8"
+                )
+            else:
+                (project_dir / sub / "_index.yaml").write_text(
+                    EMPTY_MANIFEST.format(date=today), encoding="utf-8"
+                )
         (project_dir / "_index.yaml").write_text(
             EMPTY_MANIFEST.format(date=today), encoding="utf-8"
+        )
+
+        # _status.md (always-current project status — first loaded in context)
+        (project_dir / "_status.md").write_text(
+            PROJECT_STATUS_TEMPLATE.format(name=meta.name, date=today), encoding="utf-8"
         )
 
         # _guide.md (static, human-editable)
@@ -471,6 +508,11 @@ class MemoryFS:
         project_manifest = self.load_manifest(project_dir)
         core_entries = [
             ManifestEntry(
+                name="_status.md",
+                description=f"Always-current project status for {meta.name}.",
+                read_when="First — before loading any other context for this project.",
+            ),
+            ManifestEntry(
                 name="people.md",
                 description=f"Key contacts and stakeholders for {meta.name}.",
                 read_when="Before any communication or meeting.",
@@ -493,7 +535,7 @@ class MemoryFS:
                 ManifestEntry(
                     name="_meta.yaml",
                     description=description,
-                    read_when="Always read first for project context.",
+                    read_when="When understanding project scope or metadata.",
                 ),
             )
         project_manifest.last_updated = today
@@ -632,8 +674,15 @@ class MemoryFS:
         parsed = parse_refs(content)
         warnings.extend(self.warn_unresolved_refs(parsed["refs"]))
 
-        # Mark manifest stale
-        self.mark_manifest_stale(abs_path.parent)
+        # For updates/ folders: update last_entry_date instead of marking stale
+        if is_updates_folder(abs_path.parent):
+            manifest = self.load_manifest(abs_path.parent)
+            manifest.last_entry_date = _today()
+            manifest.last_updated = _today()
+            self.save_manifest(abs_path.parent, manifest)
+        else:
+            # Mark manifest stale for other append-only files (e.g. decisions.md)
+            self.mark_manifest_stale(abs_path.parent)
 
         return warnings
 
@@ -667,10 +716,22 @@ class MemoryFS:
     def search_files(
         self,
         keyword: str,
+        project_slug: Optional[str] = None,
         folder: Optional[str | Path] = None,
     ) -> list[dict[str, Any]]:
-        """Search .md files for keyword.  Returns list of {path, line_no, line}."""
-        search_root = self._safe_path(folder) if folder else self.root
+        """Search .md files for keyword.  Returns list of {path, line_no, line}.
+
+        ``project_slug`` is the preferred filter (searches projects/{slug}/).
+        ``folder`` is a lower-level escape hatch for arbitrary paths.
+        """
+        if project_slug:
+            search_root = self._safe_path(f"projects/{project_slug}")
+            if not search_root.is_dir():
+                raise FileNotFoundError(f"Project {project_slug!r} not found")
+        elif folder:
+            search_root = self._safe_path(folder)
+        else:
+            search_root = self.root
         results: list[dict[str, Any]] = []
         kw_lower = keyword.lower()
 
@@ -786,6 +847,45 @@ class MemoryFS:
             ),
         )
         return path
+
+    # ------------------------------------------------------------------
+    # Global entity listing
+    # ------------------------------------------------------------------
+
+    def list_global_people(self) -> list[dict[str, Any]]:
+        """Return all entries from _global/people/_index.yaml."""
+        folder = self.root / "_global" / "people"
+        manifest = self.load_manifest(folder)
+        return [e.model_dump() for e in manifest.files]
+
+    def list_global_companies(self) -> list[dict[str, Any]]:
+        """Return all entries from _global/companies/_index.yaml."""
+        folder = self.root / "_global" / "companies"
+        manifest = self.load_manifest(folder)
+        return [e.model_dump() for e in manifest.files]
+
+    # ------------------------------------------------------------------
+    # Refs index rebuild
+    # ------------------------------------------------------------------
+
+    def rebuild_refs_index(self) -> int:
+        """Scan all .md files and rebuild _refs-index.json from scratch.
+
+        Returns the number of files indexed.
+        """
+        new_index = RefsIndex()
+        for p in sorted(self.root.rglob("*.md")):
+            if p.name.startswith("_"):
+                continue
+            try:
+                content = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            rel_path = self._rel(p)
+            parsed = parse_refs(content)
+            new_index.entries[rel_path] = RefsIndexEntry(path=rel_path, **parsed)
+        self.save_refs_index(new_index)
+        return len(new_index.entries)
 
     # ------------------------------------------------------------------
     # Stale manifest discovery

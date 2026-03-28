@@ -77,14 +77,26 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             return {"error": str(e), "warnings": []}
 
     @mcp.tool
-    def get_project_context(slug: str) -> dict[str, Any]:
-        """Return _meta.yaml content + rendered _index.yaml for a project."""
+    def get_project_context(slug: str, deep: bool = False) -> dict[str, Any]:
+        """Return project context.
+
+        Lightweight (default): _status.md + _meta.yaml + rendered _index.yaml.
+        Deep (deep=True): additionally includes knowledge/_index.yaml manifest
+        and people.md content.
+        """
         try:
             project_dir = root / "projects" / slug
             if not project_dir.exists():
                 return {"error": f"Project {slug!r} not found", "warnings": []}
 
             warnings: list[str] = []
+
+            # _status.md — always loaded first
+            status_path = project_dir / "_status.md"
+            status_content = status_path.read_text(encoding="utf-8") if status_path.exists() else None
+            if not status_path.exists():
+                warnings.append(f"_status.md is missing for project {slug!r}")
+
             meta_path = project_dir / "_meta.yaml"
             if not meta_path.exists():
                 warnings.append(f"_meta.yaml is missing for project {slug!r}")
@@ -94,13 +106,25 @@ def create_server(root: Path) -> fastmcp.FastMCP:
 
             manifest_text = fs.render_manifest(project_dir)
 
-            return {
-                "result": {
-                    "meta": meta_content,
-                    "manifest": manifest_text,
-                },
-                "warnings": warnings,
+            result: dict[str, Any] = {
+                "status": status_content,
+                "meta": meta_content,
+                "manifest": manifest_text,
             }
+
+            if deep:
+                # Knowledge manifest
+                knowledge_dir = project_dir / "knowledge"
+                result["knowledge_manifest"] = (
+                    fs.render_manifest(knowledge_dir) if knowledge_dir.is_dir() else None
+                )
+                # People file
+                people_path = project_dir / "people.md"
+                result["people"] = (
+                    people_path.read_text(encoding="utf-8") if people_path.exists() else None
+                )
+
+            return {"result": result, "warnings": warnings}
         except Exception as e:
             return {"error": str(e), "warnings": []}
 
@@ -345,11 +369,21 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             return {"error": str(e), "warnings": []}
 
     @mcp.tool
-    def search_files(keyword: str, folder: Optional[str] = None) -> dict[str, Any]:
-        """Search .md files for keyword.  Returns path, line number, and matching line."""
+    def search_files(
+        keyword: str,
+        project_slug: Optional[str] = None,
+        folder: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Search .md files for keyword.  Returns path, line number, and matching line.
+
+        Prefer ``project_slug`` to scope search to a project.
+        ``folder`` is a lower-level filter for arbitrary sub-paths.
+        """
         try:
-            results = fs.search_files(keyword, folder=folder)
+            results = fs.search_files(keyword, project_slug=project_slug, folder=folder)
             return {"result": results, "warnings": []}
+        except FileNotFoundError as e:
+            return {"error": str(e), "warnings": []}
         except Exception as e:
             return {"error": str(e), "warnings": []}
 
@@ -479,6 +513,36 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                 return {"error": f"Company {slug!r} not found", "warnings": []}
             content = path.read_text(encoding="utf-8")
             return {"result": content, "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def list_global_people() -> dict[str, Any]:
+        """List all people in _global/people/ from the manifest."""
+        try:
+            people = fs.list_global_people()
+            return {"result": people, "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def list_global_companies() -> dict[str, Any]:
+        """List all companies in _global/companies/ from the manifest."""
+        try:
+            companies = fs.list_global_companies()
+            return {"result": companies, "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def rebuild_refs_index() -> dict[str, Any]:
+        """Rebuild _refs-index.json by scanning all .md files from scratch."""
+        try:
+            count = fs.rebuild_refs_index()
+            return {
+                "result": f"Refs index rebuilt: {count} files indexed",
+                "warnings": [],
+            }
         except Exception as e:
             return {"error": str(e), "warnings": []}
 

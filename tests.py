@@ -11,6 +11,7 @@ from filesystem import (
     MemoryFS,
     is_append_only,
     is_manifest,
+    is_updates_folder,
     parse_refs,
     to_kebab_case,
     validate_knowledge_frontmatter,
@@ -570,3 +571,342 @@ class TestMCPTools:
         r = parse_result(self._call(mcp_server, "update_manifest",
                                     folder_path="projects/rebuild-proj"))
         assert "error" not in r
+
+
+# ---------------------------------------------------------------------------
+# New tests — issue requirements
+# ---------------------------------------------------------------------------
+
+
+class TestIsUpdatesFolder:
+    def test_updates_folder(self):
+        assert is_updates_folder(Path("projects/my-proj/updates"))
+
+    def test_not_updates_folder(self):
+        assert not is_updates_folder(Path("projects/my-proj/notes"))
+
+    def test_root_level_updates(self):
+        # only name matters, not depth
+        assert is_updates_folder(Path("updates"))
+
+
+class TestGuideTemplate:
+    """_guide.md must use | Folder | Contains | Read when | columns and include _status.md."""
+
+    def test_column_headers(self):
+        from templates import PROJECT_GUIDE_TEMPLATE
+        assert "| Folder / File | Contains | Read when |" in PROJECT_GUIDE_TEMPLATE
+
+    def test_includes_status_md(self):
+        from templates import PROJECT_GUIDE_TEMPLATE
+        assert "_status.md" in PROJECT_GUIDE_TEMPLATE
+
+    def test_scaffold_guide_uses_template(self, fs):
+        fs.scaffold_project("g-proj", make_meta(slug="g-proj"))
+        guide = (fs.root / "projects" / "g-proj" / "_guide.md").read_text()
+        assert "| Folder / File | Contains | Read when |" in guide
+        assert "_status.md" in guide
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+
+class TestStatusMd:
+    """_status.md must be created at scaffold and loaded first in get_project_context."""
+
+    def test_scaffold_creates_status_md(self, fs):
+        fs.scaffold_project("s-proj", make_meta(slug="s-proj"))
+        assert (fs.root / "projects" / "s-proj" / "_status.md").exists()
+
+    def test_status_md_content(self, fs):
+        fs.scaffold_project("s-proj", make_meta(slug="s-proj", name="Status Test"))
+        content = (fs.root / "projects" / "s-proj" / "_status.md").read_text()
+        assert "Status Test" in content
+        assert "Current state:" in content
+        assert "Next action:" in content
+
+    def test_status_md_in_manifest(self, fs):
+        fs.scaffold_project("s-proj", make_meta(slug="s-proj"))
+        manifest = fs.load_manifest(fs.root / "projects" / "s-proj")
+        entry = next((e for e in manifest.files if e.name == "_status.md"), None)
+        assert entry is not None
+        assert "First" in entry.read_when or "first" in entry.read_when
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+
+class TestGetProjectContextDeep:
+    def _call(self, server, tool: str, **kwargs):
+        return asyncio.run(server.call_tool(tool, kwargs))
+
+    def test_shallow_includes_status(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="deep-proj", name="Deep Test")
+        r = parse_result(self._call(mcp_server, "get_project_context", slug="deep-proj"))
+        assert "error" not in r
+        assert "status" in r["result"]
+        assert r["result"]["status"] is not None
+
+    def test_shallow_has_no_deep_keys(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="shallow-proj", name="Shallow")
+        r = parse_result(self._call(mcp_server, "get_project_context", slug="shallow-proj"))
+        assert "error" not in r
+        assert "knowledge_manifest" not in r["result"]
+        assert "people" not in r["result"]
+
+    def test_deep_includes_knowledge_manifest(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="deep2-proj", name="Deep2")
+        r = parse_result(self._call(mcp_server, "get_project_context",
+                                    slug="deep2-proj", deep=True))
+        assert "error" not in r
+        assert "knowledge_manifest" in r["result"]
+        assert "people" in r["result"]
+
+    def test_deep_knowledge_manifest_is_string(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="deep3-proj", name="Deep3")
+        r = parse_result(self._call(mcp_server, "get_project_context",
+                                    slug="deep3-proj", deep=True))
+        assert isinstance(r["result"]["knowledge_manifest"], str)
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)
+
+
+class TestSearchFilesProjectSlug:
+    def _call(self, server, tool: str, **kwargs):
+        return asyncio.run(server.call_tool(tool, kwargs))
+
+    def test_project_slug_scopes_search(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="proj-a", name="Proj A")
+        self._call(mcp_server, "create_project", slug="proj-b", name="Proj B")
+        self._call(mcp_server, "write_file",
+                   path="projects/proj-a/notes/note.md",
+                   content="# Note\n\nUniqueTermAlpha here.")
+        self._call(mcp_server, "write_file",
+                   path="projects/proj-b/notes/note.md",
+                   content="# Note\n\nDifferent content.")
+        # Search within proj-a only
+        r = parse_result(self._call(mcp_server, "search_files",
+                                    keyword="UniqueTermAlpha", project_slug="proj-a"))
+        assert len(r["result"]) > 0
+        assert all("proj-a" in hit["path"] for hit in r["result"])
+
+    def test_project_slug_excludes_other_projects(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="src-a", name="Src A")
+        self._call(mcp_server, "create_project", slug="src-b", name="Src B")
+        self._call(mcp_server, "write_file",
+                   path="projects/src-a/notes/note.md",
+                   content="# SharedKeyword")
+        self._call(mcp_server, "write_file",
+                   path="projects/src-b/notes/note.md",
+                   content="# SharedKeyword")
+        r = parse_result(self._call(mcp_server, "search_files",
+                                    keyword="SharedKeyword", project_slug="src-a"))
+        assert all("src-a" in hit["path"] for hit in r["result"])
+        assert not any("src-b" in hit["path"] for hit in r["result"])
+
+    def test_project_slug_not_found_returns_error(self, mcp_server):
+        r = parse_result(self._call(mcp_server, "search_files",
+                                    keyword="anything", project_slug="no-such-proj"))
+        assert "error" in r
+
+    def test_no_filter_searches_everywhere(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="glob-proj", name="Global")
+        self._call(mcp_server, "write_file",
+                   path="projects/glob-proj/notes/note.md",
+                   content="# GlobalSearchTerm found here.")
+        r = parse_result(self._call(mcp_server, "search_files", keyword="GlobalSearchTerm"))
+        assert len(r["result"]) > 0
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)
+
+
+class TestListGlobalPeopleCompanies:
+    def _call(self, server, tool: str, **kwargs):
+        return asyncio.run(server.call_tool(tool, kwargs))
+
+    def test_list_global_people_empty(self, mcp_server):
+        r = parse_result(self._call(mcp_server, "list_global_people"))
+        assert "error" not in r
+        assert r["result"] == []
+
+    def test_list_global_people_after_create(self, mcp_server):
+        self._call(mcp_server, "create_person", slug="alice-wonder", name="Alice Wonder")
+        self._call(mcp_server, "create_person", slug="bob-builder", name="Bob Builder")
+        r = parse_result(self._call(mcp_server, "list_global_people"))
+        assert "error" not in r
+        names = [e["name"] for e in r["result"]]
+        assert "alice-wonder.md" in names
+        assert "bob-builder.md" in names
+
+    def test_list_global_companies_empty(self, mcp_server):
+        r = parse_result(self._call(mcp_server, "list_global_companies"))
+        assert "error" not in r
+        assert r["result"] == []
+
+    def test_list_global_companies_after_create(self, mcp_server):
+        self._call(mcp_server, "create_company", slug="widget-corp", name="Widget Corp")
+        r = parse_result(self._call(mcp_server, "list_global_companies"))
+        assert "error" not in r
+        names = [e["name"] for e in r["result"]]
+        assert "widget-corp.md" in names
+
+    def test_list_people_entries_have_description(self, mcp_server):
+        self._call(mcp_server, "create_person", slug="desc-person", name="Desc Person",
+                   description="A described person")
+        r = parse_result(self._call(mcp_server, "list_global_people"))
+        entry = next(e for e in r["result"] if e["name"] == "desc-person.md")
+        assert entry["description"] == "A described person"
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)
+
+
+class TestRebuildRefsIndex:
+    def _call(self, server, tool: str, **kwargs):
+        return asyncio.run(server.call_tool(tool, kwargs))
+
+    def test_rebuild_refs_index_tool(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="refs-proj", name="Refs")
+        self._call(mcp_server, "write_file",
+                   path="projects/refs-proj/notes/note.md",
+                   content="# Note\n\n@john-doe and #python mentioned.")
+        r = parse_result(self._call(mcp_server, "rebuild_refs_index"))
+        assert "error" not in r
+        assert "indexed" in r["result"]
+
+    def test_rebuild_fixes_drifted_index(self, mcp_server, tmp_path):
+        """Rebuild should re-scan files even if the index was corrupted."""
+        self._call(mcp_server, "create_project", slug="drift-proj", name="Drift")
+        self._call(mcp_server, "write_file",
+                   path="projects/drift-proj/notes/note.md",
+                   content="# Note\n\n#drifted-tag mentioned.")
+        # Corrupt the index
+        idx_path = tmp_path / "_refs-index.json"
+        idx_path.write_text('{"entries": {}}', encoding="utf-8")
+        # Rebuild
+        r = parse_result(self._call(mcp_server, "rebuild_refs_index"))
+        assert "error" not in r
+        # Verify the tag is now back in the index
+        r2 = parse_result(self._call(mcp_server, "get_refs_for", ref="drifted-tag"))
+        assert len(r2["result"]) > 0
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)
+
+
+class TestUpdatesManifestConvention:
+    def test_updates_manifest_has_description(self, fs):
+        fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
+        manifest = fs.load_manifest(fs.root / "projects" / "upd-proj" / "updates")
+        assert manifest.description is not None
+        assert "log" in manifest.description.lower() or "chronological" in manifest.description.lower()
+
+    def test_updates_manifest_has_last_entry_date_null(self, fs):
+        fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
+        manifest = fs.load_manifest(fs.root / "projects" / "upd-proj" / "updates")
+        assert manifest.last_entry_date is None
+
+    def test_append_to_updates_sets_last_entry_date(self, fs):
+        fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
+        fs.append_file("projects/upd-proj/updates/2025-01-15.md", "\nUpdate content.")
+        manifest = fs.load_manifest(fs.root / "projects" / "upd-proj" / "updates")
+        assert manifest.last_entry_date is not None
+
+    def test_append_to_updates_does_not_mark_stale(self, fs):
+        fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
+        fs.append_file("projects/upd-proj/updates/2025-01-15.md", "\nUpdate content.")
+        manifest = fs.load_manifest(fs.root / "projects" / "upd-proj" / "updates")
+        assert manifest.stale is False
+
+    def test_append_to_decisions_still_marks_stale(self, fs):
+        """Stale behaviour for non-updates append-only files must be unchanged."""
+        fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
+        fs.append_file("projects/upd-proj/decisions.md", "\n## Decision")
+        manifest = fs.load_manifest(fs.root / "projects" / "upd-proj")
+        assert manifest.stale is True
+
+    def test_rebuild_manifest_updates_folder_keeps_description(self, fs):
+        fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
+        updates_dir = fs.root / "projects" / "upd-proj" / "updates"
+        manifest = fs.rebuild_manifest(updates_dir)
+        assert manifest.description is not None
+        assert manifest.stale is False
+
+    def test_render_manifest_shows_description_and_last_entry_date(self, fs):
+        fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
+        fs.append_file("projects/upd-proj/updates/2025-01-15.md", "\nUpdate content.")
+        text = fs.render_manifest(fs.root / "projects" / "upd-proj" / "updates")
+        assert "Description:" in text
+        assert "Last entry date:" in text
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+
+class TestRebuildRefsIndexFS:
+    def test_returns_file_count(self, fs):
+        fs.scaffold_project("r-proj", make_meta(slug="r-proj"))
+        fs.write_file("projects/r-proj/notes/note.md", "# Note\n\n#tag1")
+        count = fs.rebuild_refs_index()
+        assert count >= 1
+
+    def test_populates_tags(self, fs):
+        fs.scaffold_project("r-proj", make_meta(slug="r-proj"))
+        fs.write_file("projects/r-proj/notes/note.md", "# Note\n\n#rebuild-tag")
+        # Wipe index manually
+        (fs.root / "_refs-index.json").write_text('{"entries": {}}', encoding="utf-8")
+        fs.rebuild_refs_index()
+        refs_index = fs.load_refs_index()
+        all_tags = [tag for e in refs_index.entries.values() for tag in e.tags]
+        assert "rebuild-tag" in all_tags
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+
+class TestListGlobalPeopleCompaniesFS:
+    def test_list_people_empty(self, fs):
+        result = fs.list_global_people()
+        assert result == []
+
+    def test_list_people_after_create(self, fs):
+        fs.create_person("p1", "Person One")
+        fs.create_person("p2", "Person Two")
+        result = fs.list_global_people()
+        names = [e["name"] for e in result]
+        assert "p1.md" in names
+        assert "p2.md" in names
+
+    def test_list_companies_empty(self, fs):
+        result = fs.list_global_companies()
+        assert result == []
+
+    def test_list_companies_after_create(self, fs):
+        fs.create_company("c1", "Company One")
+        result = fs.list_global_companies()
+        names = [e["name"] for e in result]
+        assert "c1.md" in names
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
