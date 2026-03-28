@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+tests/.pytest_cache/
 memory-root/
 test-memory/
 *.egg-info/

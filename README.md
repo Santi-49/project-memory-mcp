@@ -1,203 +1,161 @@
 # Project Memory MCP Server
 
-A [FastMCP](https://github.com/jlowin/fastmcp)-based server that manages a structured project memory filesystem using Markdown and YAML files on plain disk. Designed to support a future RAG layer without schema changes.
+A [FastMCP](https://github.com/jlowin/fastmcp)-based server that gives an LLM a structured, navigable filesystem for long-term project memory. Memory lives on plain disk as Markdown and YAML files — no database, no embeddings required. Designed to slot under a future RAG layer without schema changes.
 
 ---
 
-## Requirements & Installation
+## How it works
+
+The server exposes a set of MCP tools that an LLM (e.g. Claude) calls to read, write, and navigate project memory. Every project gets a predictable folder layout:
+
+```
+projects/{slug}/
+├── _status.md     ← always-current status: "as of today, blocked on X, next action is Y"
+├── _guide.md      ← folder structure reference table
+├── _meta.yaml     ← project metadata (status, type, owner, tags)
+├── people.md      ← key contacts
+├── decisions.md   ← append-only decision log
+├── knowledge/     ← processed knowledge entries with YAML frontmatter
+├── updates/       ← chronological append-only update log
+└── ...
+```
+
+Three auto-managed JSON/YAML indexes keep navigation fast:
+
+| Index file | Purpose |
+|---|---|
+| `_index.yaml` (per folder) | Manifest: file descriptions + "read when" hints used by the LLM to decide what to load |
+| `_projects-index.json` | Fast project listing with filter support |
+| `_refs-index.json` | `@person`, `#tag`, `[[link]]` cross-reference index |
+
+The `read_when` field in manifests is the key design element: it lets the LLM skip reading files it does not need, and is a first-class embedding target for a future RAG layer.
+
+---
+
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**Dependencies:**
-- `fastmcp>=2.0.0` — MCP server framework
-- `pyyaml>=6.0` — YAML parsing and serialisation
-- `pydantic>=2.0` — Data validation
+Dependencies: `fastmcp>=2.0.0`, `pyyaml>=6.0`, `pydantic>=2.0`
 
 ---
 
-## CLI Usage
+## Usage
 
 ```bash
-# Start with default memory-root in current directory
-python server.py --root ./memory-root
+# Start with default memory root
+python src/server.py --root ./memory-root
 
-# Custom path
-python server.py --root /home/user/project-memory
-
-# HTTP transport (for use with HTTP-capable MCP clients)
-python server.py --root ./memory-root --transport http --host 127.0.0.1 --port 8000
+# HTTP transport (for HTTP-capable MCP clients)
+python src/server.py --root ./memory-root --transport http --host 127.0.0.1 --port 8000
 ```
 
-On first run, the server automatically initialises the root structure:
+On first run the server creates the root structure automatically.
 
-```
-memory-root/
-├── _index.yaml                  # Root manifest (auto-managed)
-├── _projects-index.json         # Fast-lookup project index (auto-managed)
-├── _refs-index.json             # @ref / #tag / [[link]] index (auto-managed)
-├── _global/
-│   ├── _index.yaml
-│   ├── people/
-│   │   └── _index.yaml
-│   └── companies/
-│       └── _index.yaml
-├── _templates/                  # Reference template files
-├── _trash/                      # Soft-deleted files land here
-└── projects/                    # Project folders created here
-```
+### Connecting to Claude Desktop
 
----
+Add the following to your `claude_desktop_config.json`:
 
-## Memory Root Structure
-
-Each project lives at `projects/{project-slug}/` with the following layout:
-
-```
-projects/my-project/
-├── _guide.md            # Static folder guide (human-editable)
-├── _index.yaml          # Auto-managed manifest — use get_folder_manifest
-├── _meta.yaml           # Project metadata
-├── people.md            # Key contacts
-├── companies.md         # Company relationships
-├── decisions.md         # Decision log (append-only)
-├── knowledge/           # Processed knowledge entries
-├── correspondence/      # Emails, calls, messages
-├── updates/             # Date-stamped updates (append-only)
-├── docs/                # Reference documents
-└── notes/               # Free-form notes
-```
-
-> **Important:** Never write to `_index.yaml` directly. Always use `update_file_description` or `update_manifest`.
-
----
-
-## Tool Reference
-
-### Filesystem Tools
-
-| Tool | Parameters | Description |
-|---|---|---|
-| `list_projects` | `status?`, `type?`, `tags?` | List all projects; optional filters |
-| `get_project_context` | `slug` | Returns `_meta.yaml` content + rendered `_index.yaml` |
-| `get_folder_manifest` | `folder_path` | Renders `_index.yaml` as human-readable text |
-| `read_file` | `path` | UTF-8 file read; blocks `_index.yaml` direct reads |
-| `write_file` | `path`, `content`, `description?`, `read_when?` | Write with rule enforcement + manifest update |
-| `append_to_file` | `path`, `content` | Append to `updates/*.md` or `decisions.md` only |
-| `create_project` | `slug`, `name`, `status?`, `type?`, `meta?`, `description?` | Full project scaffold |
-| `create_knowledge_entry` | `project_slug`, `topic`, `content`, `frontmatter`, `description?`, `read_when?` | Knowledge entry with frontmatter validation |
-| `update_manifest` | `folder_path` | Rebuild `_index.yaml` from current folder contents |
-| `update_file_description` | `folder_path`, `filename`, `description`, `read_when?`, `stale_after?` | Targeted manifest entry update |
-| `resolve_ref` | `slug` | `@slug` → global entity path + content |
-| `get_refs_for` | `ref` | `@slug`/`#tag`/`[[link]]` → list of files that mention it |
-| `search_files` | `keyword`, `folder?` | Full-text search across `.md` files |
-| `delete_file` | `path` | Soft-delete to `_trash/`; removes manifest entry |
-| `list_stale_manifests` | — | All folders with `stale: true` in `_index.yaml` |
-
-### Global Entity Tools
-
-| Tool | Parameters | Description |
-|---|---|---|
-| `create_person` | `slug`, `name`, `title?`, `company?`, `email?`, `phone?`, `description?` | Create person in `_global/people/` |
-| `create_company` | `slug`, `name`, `industry?`, `website?`, `description?` | Create company in `_global/companies/` |
-| `get_person` | `slug` | Read `_global/people/{slug}.md` |
-| `get_company` | `slug` | Read `_global/companies/{slug}.md` |
-
-### Response Format
-
-All tools return:
 ```json
-{"result": ..., "warnings": [...]}
+{
+  "mcpServers": {
+    "project-memory": {
+      "command": "python",
+      "args": ["/absolute/path/to/src/server.py", "--root", "/absolute/path/to/memory-root"]
+    }
+  }
+}
 ```
-or on error:
-```json
-{"error": "...", "warnings": [...]}
-```
-
-No unhandled exceptions are raised.
 
 ---
 
-## Example Workflow
+## Quick example
 
 ```python
-# 1. Create a project
-create_project(slug="my-api", name="My API Project", status="active", type="client",
-               description="Main API integration project for ACME Corp.")
+# Create a project
+create_project(slug="my-api", name="My API Project", status="active", type="client")
 
-# 2. Add a knowledge entry
+# Load project context (status + meta + manifest in one call)
+get_project_context(slug="my-api")
+
+# Deep load also includes knowledge manifest + people
+get_project_context(slug="my-api", deep=True)
+
+# Search within a project
+search_files(keyword="OAuth2", project_slug="my-api")
+
+# Create a knowledge entry
 create_knowledge_entry(
     project_slug="my-api",
     topic="auth-design",
-    content="OAuth2 flow chosen over API keys for better security.",
+    content="OAuth2 flow chosen over API keys.",
     frontmatter={"source": "meeting-2025-01-15", "processed": "2025-01-16", "method": "manual"},
-    description="OAuth2 authentication design decision.",
-    read_when="Before implementing any auth-related code.",
 )
 
-# 3. Update a file description after writing
-write_file("projects/my-api/people.md", "# People\n\n@john-doe — Lead engineer")
-update_file_description("projects/my-api", "people.md",
-                        description="Key stakeholders on the My API project.",
-                        read_when="Before any meeting or communication.")
-
-# 4. Search across all notes
-search_files("OAuth2")
-
-# 5. Create global entities
-create_person(slug="john-doe", name="John Doe", title="Lead Engineer", email="john@acme.com")
-create_company(slug="acme-corp", name="ACME Corp", industry="Technology")
-
-# 6. Add a project decision (append-only)
+# Add a decision (append-only)
 append_to_file("projects/my-api/decisions.md",
-               "\n## 2025-01-15 — Use OAuth2\n\nChosen for security and industry standard compliance.")
+               "\n## 2025-01-15 — Use OAuth2\n\nChosen for security compliance.")
 
-# 7. Find stale manifests
-list_stale_manifests()
+# Create global entities and resolve references
+create_person(slug="john-doe", name="John Doe", title="Lead Engineer")
+create_company(slug="acme-corp", name="ACME Corp")
+resolve_ref("john-doe")           # returns _global/people/john-doe.md
+list_global_people()              # list all people without reading manifests manually
 ```
 
 ---
 
-## Filesystem Rules
+## Project structure
 
-| Rule | Enforcement |
+```
+project-memory-mcp/
+├── src/
+│   ├── server.py        # MCP server entry point + tool definitions
+│   ├── filesystem.py    # All filesystem logic (MemoryFS class)
+│   ├── models.py        # Pydantic data models
+│   └── templates.py     # Template strings for scaffolded files
+├── tests/
+│   ├── conftest.py      # sys.path setup for src/
+│   └── tests.py         # Full test suite (125 tests)
+├── docs/
+│   ├── tool-reference.md       # Complete tool parameter reference
+│   ├── memory-root-schema.md   # Every file/folder schema explained
+│   └── filesystem-rules.md     # Enforcement rules and their triggers
+├── README.md
+└── requirements.txt
+```
+
+---
+
+## Documentation
+
+| Document | Contents |
 |---|---|
-| Kebab-case filenames | `write_file`, `create_*` |
-| YYYY-MM-DD dates | Pydantic validators in `models.py` |
-| `updates/` and `decisions.md` append-only | `is_append_only()` check in `write_file` |
-| `_index.yaml` not directly writable | `is_manifest()` gate in `write_file` / `append_to_file` |
-| Knowledge frontmatter required | `create_knowledge_entry` + path detection in `write_file` |
-| `@ref` resolution warnings | `warn_unresolved_refs()` on every write |
-| Unique project slugs | Checked against `_projects-index.json` in `create_project` |
-| `_meta.yaml` required | `get_project_context` warns if missing |
+| [docs/tool-reference.md](docs/tool-reference.md) | Every tool: parameters, behaviour, return shape |
+| [docs/memory-root-schema.md](docs/memory-root-schema.md) | Every file and folder schema (YAML examples included) |
+| [docs/filesystem-rules.md](docs/filesystem-rules.md) | All enforced rules: what triggers them, error vs warning |
 
 ---
 
-## `_index.yaml` Schema
+## Running tests
 
-```yaml
-# Auto-managed by the MCP server. Edit descriptions via update_file_description tool.
-last_updated: "2025-01-15"
-stale: false
-files:
-  - name: "roadmap.md"
-    description: "Product roadmap and milestone timeline."
-    read_when: "Planning next sprint or reviewing timeline commitments."
-    stale_after: "After any major scope change."
-  - name: "api-spec.md"
-    description: "API contract summary from v2 spec document."
-    read_when: "Before writing any integration code."
-    stale_after: null
+```bash
+pip install -r requirements.txt pytest
+python -m pytest tests/
 ```
 
 ---
 
-## Future RAG Integration
+## Design notes
 
-`_index.yaml` files are the primary metadata pre-filter for query routing. The `read_when` field is a first-class embedding target — it allows a RAG layer to route queries to the right folder without needing to embed or scan every file.
+**Why plain files?**  
+Plain Markdown and YAML files are human-readable, git-versionable, and require no migration when the schema evolves. An LLM can read and write them directly without an ORM or query language.
 
-Planned integration points:
-- Embed `description` + `read_when` fields at index-build time
-- Use `_projects-index.json` as a fast project pre-filter
-- `_refs-index.json` enables cross-file link traversal at query time
+**Why `_index.yaml` instead of a database?**  
+The manifest stores the `read_when` hint per file. This is the primary signal an LLM uses to decide what to load before starting a task — without it, every call would either read everything (slow, expensive) or read nothing (blind). Manifests also become the pre-filter for RAG retrieval: embed `description + read_when`, use the manifest to narrow the candidate set, then load only the relevant files.
+
+**Why soft delete?**  
+Files moved to `_trash/` are recoverable and maintain a full audit trail. Permanent deletion is an explicit on-disk action outside the MCP interface.
+
