@@ -242,7 +242,11 @@ Reads from `_refs-index.json` — O(1) lookup per token.
 
 ### `search_files`
 
-Full-text keyword search across `.md` files. Case-insensitive. Skips files whose name starts with `_`.
+Full-text keyword search across `.md` files. Case-insensitive.
+
+**Skipped paths:**
+- Files whose name starts with `_` (manifests, meta, guide, status files)
+- Any file under `_trash/` — soft-deleted files are intentionally excluded from search
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -345,3 +349,25 @@ No parameters. Returns an array of manifest entries (name, description, read_whe
 List all entries in the `_global/companies/_index.yaml` manifest.
 
 No parameters. Returns an array of manifest entries (name, description, read_when, stale_after).
+
+---
+
+## Resources
+
+MCP resources are read-only endpoints that the LLM can fetch by URI. The server exposes one resource.
+
+| Resource URI | Description |
+|---|---|
+| `memory://guide` | Compact structural reference — read once per session before using any tool |
+
+### `memory://guide`
+
+Returns a single UTF-8 Markdown string (~800 tokens) covering:
+- Root structure (dynamic — reflects the live filesystem at call time)
+- Project folder layout
+- Tool inventory with parameter signatures (dynamic — reflects registered tools at call time)
+- Reference syntax (`@ref`, `#tag`, `[[link]]`)
+- Key schemas (`_meta.yaml`, knowledge frontmatter, `_index.yaml` entry, `_status.md` frontmatter)
+- Filesystem rules table (enforcement triggers and severity)
+
+The server description instructs the LLM to read this resource before using any tool. It is not a workflow guide — navigation patterns and token-budget rules belong in the system prompt.

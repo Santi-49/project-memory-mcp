@@ -17,6 +17,7 @@ from typing import Any, Optional
 import fastmcp
 
 from filesystem import MemoryFS, is_manifest, to_kebab_case, validate_knowledge_frontmatter
+from guide import generate_guide
 from models import (
     FolderManifest,
     ManifestEntry,
@@ -37,9 +38,10 @@ def create_server(root: Path) -> fastmcp.FastMCP:
     mcp = fastmcp.FastMCP(
         name="project-memory",
         instructions=(
-            "A structured project memory filesystem. "
-            "Use list_projects to discover projects, get_project_context for details, "
-            "and get_folder_manifest to understand what files exist in a folder."
+            "Structured project memory filesystem for long-term LLM memory. "
+            "Manages projects, people, companies, correspondence, decisions, and processed "
+            "knowledge as plain Markdown and YAML files on disk.\n\n"
+            "Read resource memory://guide before using any tool."
         ),
     )
 
@@ -545,6 +547,15 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             }
         except Exception as e:
             return {"error": str(e), "warnings": []}
+
+    # -----------------------------------------------------------------------
+    # Resources
+    # -----------------------------------------------------------------------
+
+    @mcp.resource("memory://guide")
+    def get_server_guide() -> str:
+        """Structural reference for this server — read once per session before using any tool."""
+        return generate_guide(mcp, root)
 
     return mcp
 

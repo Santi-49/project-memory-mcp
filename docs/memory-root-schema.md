@@ -108,7 +108,8 @@ updated: "2025-03-28"     # YYYY-MM-DD, updated on human edits
 
 ### `_status.md` (current project status)
 
-Human-editable. Scaffolded with:
+Human-editable. Scaffolded with a plain Markdown template (no YAML frontmatter):
+
 ```markdown
 # Status — {Project Name}
 
@@ -120,18 +121,44 @@ Human-editable. Scaffolded with:
 **Last updated:** {date}
 ```
 
-Update this file after every significant event. It is the first field returned by `get_project_context`.
+The `**Last updated:** {date}` line is human-readable but not machine-parseable. If you want machine-parseable freshness metadata (recommended for RAG pipelines), prepend an optional YAML frontmatter block:
+
+```markdown
+---
+last_updated: "2025-03-28"
+---
+# Status — {Project Name}
+...
+```
+
+Either form is valid. The server does not parse `_status.md` — it reads and returns the raw content. Update this file after every significant event; it is the first field returned by `get_project_context`.
 
 ### `_guide.md` (folder structure reference)
 
-Human-editable. Scaffolded from `_templates/project-guide.md`:
+Human-editable. Scaffolded from `_templates/project-guide.md`. This is the complete table every project receives:
 
 ```markdown
+# Project Folder Guide
+
+This folder contains structured memory for this project. Below is a quick reference
+for what each file and sub-folder contains and when to read it.
+
 | Folder / File | Contains | Read when |
 |---|---|---|
-| `_status.md` | Always-current status, next action, blockers | First — before loading any other context |
+| `_status.md` | Always-current project status, next action, blockers | First — before loading any other context for this project |
 | `_meta.yaml` | Project metadata (status, type, owner, tags) | When filtering or understanding project scope |
-| ... | ... | ... |
+| `_index.yaml` | Auto-managed manifest of all files (descriptions + read-when) | Use `get_folder_manifest` tool |
+| `people.md` | Key contacts and stakeholders on this project | Before any communication or meeting |
+| `companies.md` | Company relationships relevant to this project | When researching company context |
+| `decisions.md` | Architecture and key decisions log (append-only) | Before making decisions that may overlap |
+| `knowledge/` | Processed knowledge entries (source material, summaries) | When researching a topic |
+| `correspondence/` | Email threads, calls, messages | When reviewing communication history |
+| `updates/` | Chronological date-stamped update log (append-only) | For recent progress and status |
+| `docs/` | Reference documents and specs | When working with external documents |
+| `notes/` | Free-form notes | For general reference |
+
+> **Note:** Never edit `_index.yaml` directly. Use the `update_file_description` tool.
+> `_status.md` and `_guide.md` are human-editable and not auto-managed.
 ```
 
 ### `_projects-index.json`
@@ -168,7 +195,13 @@ Human-editable. Scaffolded from `_templates/project-guide.md`:
 }
 ```
 
-Keys are paths relative to the memory root. Updated on every `write_file` and `append_to_file` call. Use `rebuild_refs_index` to reconstruct from scratch.
+Keys are paths relative to the memory root. The three arrays capture distinct token types found in the file body:
+
+- **`refs`** — `@slug` mentions (e.g. `@john-doe` → `"john-doe"`)
+- **`tags`** — `#tag` mentions (e.g. `#integration` → `"integration"`)
+- **`links`** — `[[link]]` mentions (e.g. `[[API Design]]` → `"API Design"`)
+
+Updated on every `write_file` and `append_to_file` call. Use `rebuild_refs_index` to reconstruct from scratch.
 
 ### Knowledge entry frontmatter
 

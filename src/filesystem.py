@@ -735,8 +735,12 @@ class MemoryFS:
         results: list[dict[str, Any]] = []
         kw_lower = keyword.lower()
 
+        trash_dir = self.root / "_trash"
         for p in sorted(search_root.rglob("*.md")):
             if p.name.startswith("_"):
+                continue
+            # Skip soft-deleted files that live under _trash/
+            if p.is_relative_to(trash_dir):
                 continue
             try:
                 lines = p.read_text(encoding="utf-8").splitlines()

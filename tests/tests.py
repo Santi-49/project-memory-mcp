@@ -910,3 +910,63 @@ class TestListGlobalPeopleCompaniesFS:
         memory_fs = MemoryFS(tmp_path)
         memory_fs.initialise()
         return memory_fs
+
+
+class TestSearchFilesSkipsTrash:
+    """search_files must not return results from _trash/."""
+
+    def test_trash_not_searched_globally(self, fs):
+        fs.scaffold_project("trash-proj", make_meta(slug="trash-proj"))
+        fs.write_file("projects/trash-proj/notes/note.md", "# Note\n\nUniqueTrashKeyword here.")
+        # Soft-delete — file moves to _trash/
+        fs.soft_delete("projects/trash-proj/notes/note.md")
+        # Global search must not find it
+        results = fs.search_files("UniqueTrashKeyword")
+        assert results == [], "Deleted files in _trash/ should not be searchable"
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+
+class TestGuideResource:
+    """memory://guide resource must exist and contain all required sections."""
+
+    _REQUIRED_HEADINGS = [
+        "## What this server manages",
+        "## Root structure",
+        "## Project folder layout",
+        "## Tool inventory",
+        "## Reference syntax",
+        "## Key schemas",
+        "## Filesystem rules",
+    ]
+
+    def test_guide_resource_exists(self, mcp_server):
+        resources = asyncio.run(mcp_server.list_resources())
+        uris = [str(r.uri) for r in resources]
+        assert "memory://guide" in uris
+
+    def test_guide_resource_contains_all_sections(self, mcp_server):
+        result = asyncio.run(mcp_server.read_resource("memory://guide"))
+        text = result.contents[0].content
+        for heading in self._REQUIRED_HEADINGS:
+            assert heading in text, f"Missing section heading: {heading!r}"
+
+    def test_guide_resource_contains_tool_names(self, mcp_server):
+        result = asyncio.run(mcp_server.read_resource("memory://guide"))
+        text = result.contents[0].content
+        assert "list_projects" in text
+        assert "create_project" in text
+        assert "create_person" in text
+
+    def test_guide_resource_is_string(self, mcp_server):
+        result = asyncio.run(mcp_server.read_resource("memory://guide"))
+        assert isinstance(result.contents[0].content, str)
+        assert len(result.contents[0].content) > 100
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)

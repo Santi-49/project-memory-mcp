@@ -112,15 +112,16 @@ list_global_people()              # list all people without reading manifests ma
 ```
 project-memory-mcp/
 ├── src/
-│   ├── server.py        # MCP server entry point + tool definitions
+│   ├── server.py        # MCP server entry point + tool definitions + resource
 │   ├── filesystem.py    # All filesystem logic (MemoryFS class)
+│   ├── guide.py         # memory://guide resource generator
 │   ├── models.py        # Pydantic data models
 │   └── templates.py     # Template strings for scaffolded files
 ├── tests/
 │   ├── conftest.py      # sys.path setup for src/
-│   └── tests.py         # Full test suite (125 tests)
+│   └── tests.py         # Full test suite (130 tests)
 ├── docs/
-│   ├── tool-reference.md       # Complete tool parameter reference
+│   ├── tool-reference.md       # Complete tool + resource reference
 │   ├── memory-root-schema.md   # Every file/folder schema explained
 │   └── filesystem-rules.md     # Enforcement rules and their triggers
 ├── README.md
@@ -133,9 +134,17 @@ project-memory-mcp/
 
 | Document | Contents |
 |---|---|
-| [docs/tool-reference.md](docs/tool-reference.md) | Every tool: parameters, behaviour, return shape |
+| [docs/tool-reference.md](docs/tool-reference.md) | Every tool: parameters, behaviour, return shape; Resources section |
 | [docs/memory-root-schema.md](docs/memory-root-schema.md) | Every file and folder schema (YAML examples included) |
 | [docs/filesystem-rules.md](docs/filesystem-rules.md) | All enforced rules: what triggers them, error vs warning |
+
+---
+
+## Resources
+
+| Resource | Description |
+|---|---|
+| `memory://guide` | Compact structural reference — read once per session before using any tool |
 
 ---
 
