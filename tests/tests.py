@@ -146,6 +146,30 @@ class TestValidateKnowledgeFrontmatter:
         ok, errors = validate_knowledge_frontmatter("---\n: bad: yaml: here:\n---\n")
         assert not ok
 
+    def test_source_as_string(self):
+        content = "---\nsource: 'plain text source'\nprocessed: null\n---\n\n# Topic"
+        ok, errors = validate_knowledge_frontmatter(content)
+        assert ok
+        assert errors == []
+
+    def test_source_as_list_of_strings(self):
+        content = "---\nsource:\n  - '[sp:sp-contracts/file.pdf]'\n  - '[tm:teams-general/msg123]'\nprocessed: null\n---\n\n# Topic"
+        ok, errors = validate_knowledge_frontmatter(content)
+        assert ok
+        assert errors == []
+
+    def test_source_as_m365_ref_string(self):
+        content = "---\nsource: '[sp:sp-contracts/msa-v2.pdf]'\nprocessed: null\n---\n\n# Topic"
+        ok, errors = validate_knowledge_frontmatter(content)
+        assert ok
+        assert errors == []
+
+    def test_source_as_internal_mem_ref(self):
+        content = "---\nsource: '[mem:projects/acme/correspondence/q1-thread.md]'\nprocessed: null\n---\n\n# Topic"
+        ok, errors = validate_knowledge_frontmatter(content)
+        assert ok
+        assert errors == []
+
 
 # ---------------------------------------------------------------------------
 # Integration tests — MemoryFS
@@ -1637,6 +1661,54 @@ class TestM365RefParser:
         assert len(result["m365_refs"]) == 1
 
 
+class TestInternalRefParser:
+    """TestInternalRefParser — [mem:path] token parsing via parse_refs."""
+
+    def test_single_mem_ref(self):
+        result = parse_refs("See [mem:projects/acme/knowledge/contract.md]")
+        assert len(result["internal_refs"]) == 1
+        assert result["internal_refs"][0].path == "projects/acme/knowledge/contract.md"
+
+    def test_nested_path(self):
+        result = parse_refs("From [mem:projects/acme/correspondence/q1-thread.md]")
+        assert result["internal_refs"][0].path == "projects/acme/correspondence/q1-thread.md"
+
+    def test_multiple_mem_refs(self):
+        content = "[mem:projects/a/notes/x.md] and [mem:projects/b/knowledge/y.md]"
+        result = parse_refs(content)
+        paths = [r.path for r in result["internal_refs"]]
+        assert "projects/a/notes/x.md" in paths
+        assert "projects/b/knowledge/y.md" in paths
+
+    def test_duplicate_mem_refs_deduplicated(self):
+        content = "[mem:projects/a/notes/x.md] and [mem:projects/a/notes/x.md]"
+        result = parse_refs(content)
+        assert len(result["internal_refs"]) == 1
+
+    def test_empty_mem_ref_skipped(self):
+        result = parse_refs("[mem:]")
+        assert result["internal_refs"] == []
+
+    def test_whitespace_stripped(self):
+        result = parse_refs("[mem: projects/a/notes/x.md ]")
+        assert result["internal_refs"][0].path == "projects/a/notes/x.md"
+
+    def test_coexists_with_m365_and_at_refs(self):
+        content = "@john-doe [sp:sp-contracts] [mem:projects/a/notes/x.md] #legal"
+        result = parse_refs(content)
+        assert "john-doe" in result["refs"]
+        assert "legal" in result["tags"]
+        assert len(result["m365_refs"]) == 1
+        assert len(result["internal_refs"]) == 1
+
+    def test_double_bracket_links_not_parsed_as_mem(self):
+        # [[link]] must not match [mem:]
+        content = "[[some-link]] and [mem:projects/a/notes/x.md]"
+        result = parse_refs(content)
+        assert "some-link" in result["links"]
+        assert len(result["internal_refs"]) == 1
+
+
 class TestRefsIndexM365:
     """TestRefsIndexM365 — m365_refs indexed on write, lazy migration on read."""
 
@@ -1703,6 +1775,224 @@ class TestRefsIndexM365:
         )
         results = fs.get_refs_for("sp-contracts")
         assert "projects/test-proj/notes/note.md" in results
+
+
+class TestInternalRefsIndex:
+    """TestInternalRefsIndex — internal_refs indexed on write, lazy migration, get_refs_for, warnings."""
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+    def test_internal_refs_indexed_on_write(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nRelated: [mem:projects/test-proj/knowledge/context.md]",
+        )
+        index = fs.load_refs_index()
+        entry = index.entries.get("projects/test-proj/notes/note.md")
+        assert entry is not None
+        assert len(entry.internal_refs) == 1
+        assert entry.internal_refs[0].path == "projects/test-proj/knowledge/context.md"
+
+    def test_internal_refs_lazy_migration(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        # Write a refs-index entry without internal_refs field (simulating old data)
+        old_data = {
+            "entries": {
+                "projects/test-proj/notes/note.md": {
+                    "path": "projects/test-proj/notes/note.md",
+                    "refs": [],
+                    "tags": ["old-tag"],
+                    "links": [],
+                    "m365_refs": [],
+                }
+            }
+        }
+        (fs.root / "_refs-index.json").write_text(
+            json.dumps(old_data), encoding="utf-8"
+        )
+        index = fs.load_refs_index()
+        entry = index.entries.get("projects/test-proj/notes/note.md")
+        assert entry is not None
+        assert entry.internal_refs == []
+        assert "old-tag" in entry.tags
+
+    def test_rebuild_refs_index_includes_internal_refs(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nBased on [mem:projects/test-proj/knowledge/context.md]",
+        )
+        # Wipe index
+        (fs.root / "_refs-index.json").write_text('{"entries": {}}', encoding="utf-8")
+        fs.rebuild_refs_index()
+        index = fs.load_refs_index()
+        entry = index.entries.get("projects/test-proj/notes/note.md")
+        assert entry is not None
+        assert len(entry.internal_refs) == 1
+        assert entry.internal_refs[0].path == "projects/test-proj/knowledge/context.md"
+
+    def test_get_refs_for_by_internal_ref_exact_path(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [mem:projects/test-proj/knowledge/context.md]",
+        )
+        results = fs.get_refs_for("projects/test-proj/knowledge/context.md")
+        assert "projects/test-proj/notes/note.md" in results
+
+    def test_get_refs_for_by_internal_ref_filename(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [mem:projects/test-proj/knowledge/context.md]",
+        )
+        results = fs.get_refs_for("context.md")
+        assert "projects/test-proj/notes/note.md" in results
+
+    def test_warn_unresolved_internal_ref_when_target_missing(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        warnings = fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [mem:projects/test-proj/knowledge/missing.md]",
+        )
+        assert any("missing.md" in w for w in warnings)
+        assert any("[mem:" in w for w in warnings)
+
+    def test_no_warning_when_internal_ref_target_exists(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        # First create the target file
+        fs.write_file(
+            "projects/test-proj/knowledge/context.md",
+            "---\nsource: null\nprocessed: null\n---\n\n# Context",
+        )
+        # Now reference it
+        warnings = fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [mem:projects/test-proj/knowledge/context.md]",
+        )
+        assert not any("[mem:" in w for w in warnings)
+
+
+class TestGetRelatedFiles:
+    """TestGetRelatedFiles — bidirectional [mem:] cross-reference map."""
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+    def test_referenced_by_lists_files_that_link_here(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        # Create the target file
+        fs.write_file(
+            "projects/test-proj/knowledge/context.md",
+            "---\nsource: null\nprocessed: null\n---\n\n# Context",
+        )
+        # Create a file that references the target
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [mem:projects/test-proj/knowledge/context.md]",
+        )
+        result = fs.get_related_files("projects/test-proj/knowledge/context.md")
+        assert "projects/test-proj/notes/note.md" in result["referenced_by"]
+
+    def test_references_lists_files_this_file_links_to(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/knowledge/context.md",
+            "---\nsource: null\nprocessed: null\n---\n\n# Context",
+        )
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [mem:projects/test-proj/knowledge/context.md]",
+        )
+        result = fs.get_related_files("projects/test-proj/notes/note.md")
+        assert "projects/test-proj/knowledge/context.md" in result["references"]
+
+    def test_bidirectional_links(self, fs):
+        """Two files that reference each other should appear in each other's maps."""
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/knowledge/context.md",
+            "---\nsource: null\nprocessed: null\n---\n\n# Context\n[mem:projects/test-proj/notes/note.md]",
+        )
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [mem:projects/test-proj/knowledge/context.md]",
+        )
+        r_ctx = fs.get_related_files("projects/test-proj/knowledge/context.md")
+        r_note = fs.get_related_files("projects/test-proj/notes/note.md")
+        assert "projects/test-proj/notes/note.md" in r_ctx["referenced_by"]
+        assert "projects/test-proj/knowledge/context.md" in r_note["referenced_by"]
+
+    def test_m365_refs_included_in_result(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/knowledge/contract.md",
+            "---\nsource: '[sp:sp-contracts/msa-v2.pdf]'\nprocessed: null\n---\n\n# Contract\n\nSee [sp:sp-contracts/msa-v2.pdf]",
+        )
+        result = fs.get_related_files("projects/test-proj/knowledge/contract.md")
+        assert len(result["m365_refs"]) == 1
+        assert result["m365_refs"][0]["source_id"] == "sp-contracts"
+
+    def test_empty_result_for_file_with_no_cross_refs(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file("projects/test-proj/notes/standalone.md", "# Standalone note")
+        result = fs.get_related_files("projects/test-proj/notes/standalone.md")
+        assert result["referenced_by"] == []
+        assert result["references"] == []
+        assert result["m365_refs"] == []
+
+    def test_nonexistent_file_returns_empty_result(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        result = fs.get_related_files("projects/test-proj/notes/nonexistent.md")
+        assert result["referenced_by"] == []
+        assert result["references"] == []
+        assert result["m365_refs"] == []
+
+    def test_mcp_tool_get_related_files(self, tmp_path):
+        server = create_server(tmp_path)
+
+        def call(tool, **kwargs):
+            return asyncio.run(server.call_tool(tool, kwargs))
+
+        call("create_project", slug="rel-proj", name="Rel")
+        call(
+            "write_file",
+            path="projects/rel-proj/knowledge/context.md",
+            content="---\nsource: null\nprocessed: null\n---\n\n# Context",
+        )
+        call(
+            "write_file",
+            path="projects/rel-proj/notes/note.md",
+            content="# Note\n\nSee [mem:projects/rel-proj/knowledge/context.md]",
+        )
+        r = parse_result(
+            call("get_related_files", path="projects/rel-proj/knowledge/context.md")
+        )
+        assert "error" not in r
+        assert "projects/rel-proj/notes/note.md" in r["result"]["referenced_by"]
+
+    def test_mcp_tool_get_related_files_not_found(self, tmp_path):
+        server = create_server(tmp_path)
+
+        def call(tool, **kwargs):
+            return asyncio.run(server.call_tool(tool, kwargs))
+
+        call("create_project", slug="rel-proj", name="Rel")
+        r = parse_result(
+            call("get_related_files", path="projects/rel-proj/notes/nonexistent.md")
+        )
+        # Non-existent file returns empty result, not an error
+        assert "error" not in r
+        assert r["result"]["referenced_by"] == []
+        assert r["result"]["references"] == []
 
 
 class TestResolveM365Ref:
