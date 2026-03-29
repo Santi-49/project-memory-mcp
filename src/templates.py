@@ -16,12 +16,18 @@ for what each file and sub-folder contains and when to read it.
 | `decisions.md` | Architecture and key decisions log (append-only) | Before making decisions that may overlap |
 | `knowledge/` | Processed knowledge entries (source material, summaries) | When researching a topic |
 | `correspondence/` | Email threads, calls, messages | When reviewing communication history |
+| `correspondence/email-threads.md` | Email summaries and thread outcomes | When tracking approvals, commitments, or async decisions |
+| `correspondence/calls.md` | Meeting and call summaries | When reconstructing discussions and verbal agreements |
+| `correspondence/messages.md` | Chat/IM summaries (Teams/Slack) | When checking fast-moving blockers and ad-hoc decisions |
 | `updates/` | Chronological date-stamped update log (append-only) | For recent progress and status |
 | `docs/` | Reference documents and specs | When working with external documents |
 | `notes/` | Free-form notes | For general reference |
 
 > **Note:** Never edit `_index.yaml` directly. Use the `update_file_description` tool.
 > `_status.md` and `_guide.md` are human-editable and not auto-managed.
+>
+> **Routing quick rules:**
+> Put stable, reusable knowledge in `knowledge/`; put timeline events in `updates/`; put irreversible choices in `decisions.md`; put source communication in `correspondence/*`; put working drafts in `notes/`.
 """
 
 PROJECT_STATUS_TEMPLATE = """\

@@ -59,6 +59,31 @@ projects/{slug}/
 └── notes/                       Free-form scratchpad
 ```"""
 
+_SECTION_FOLDER_ROUTING = """\
+## Folder routing rules
+
+Use this decision table when choosing where new information belongs.
+
+Need                                      Write to
+────────────────────────────────────────  ─────────────────────────────────────────────
+Current status and immediate next step    _status.md
+Metadata and ownership fields             _meta.yaml
+Durable decision and rationale            decisions.md (append-only)
+Processed reusable knowledge              knowledge/{topic}.md (with frontmatter)
+Chronological project log/event trail     updates/{date-or-topic}.md (append-only)
+Email thread summaries                    correspondence/email-threads.md
+Meeting/call summaries                    correspondence/calls.md
+Chat message summaries                    correspondence/messages.md
+External specs / source docs              docs/*
+Temporary working notes / drafts          notes/*
+Stakeholder links by person/company       people.md (auto-managed), companies.md
+
+If unsure between folders:
+- Prefer `knowledge/` for evergreen facts likely reused later.
+- Prefer `updates/` for time-ordered progress notes.
+- Prefer `notes/` only for transient draft material.
+"""
+
 _SECTION_REF_SYNTAX = """\
 ## Reference syntax
 
@@ -283,6 +308,7 @@ def generate_guide(mcp: "fastmcp.FastMCP", root: Path) -> str:
             _SECTION_WHAT_THIS_MANAGES,
             _section_root_structure(root),
             _SECTION_PROJECT_LAYOUT,
+            _SECTION_FOLDER_ROUTING,
             _section_tool_inventory(mcp),
             _SECTION_REF_SYNTAX,
             _SECTION_KEY_SCHEMAS,
@@ -419,30 +445,32 @@ def _m365_section_source_registry(root: Path) -> str:
             except Exception:
                 continue
 
-            type_map = {"teams": "Teams", "outlook": "Outlook", "sharepoint": "SharePoint"}
+            type_map = {
+                "teams": "Teams",
+                "outlook": "Outlook",
+                "sharepoint": "SharePoint",
+            }
             sources_dict = raw.get("sources", {})
             for src_type, src_list in sources_dict.items():
                 if not isinstance(src_list, list):
                     continue
                 for source in src_list:
-                    rows.append((
-                        slug,
-                        source.get("id", ""),
-                        type_map.get(src_type, src_type),
-                        source.get("label", ""),
-                        source.get("last_processed_at") or "—",
-                        "✓" if source.get("enabled", True) else "✗",
-                    ))
+                    rows.append(
+                        (
+                            slug,
+                            source.get("id", ""),
+                            type_map.get(src_type, src_type),
+                            source.get("label", ""),
+                            source.get("last_processed_at") or "—",
+                            "✓" if source.get("enabled", True) else "✗",
+                        )
+                    )
 
     if not rows:
-        lines.append(
-            "| Project | ID | Type | Label | Last processed | Enabled |"
-        )
+        lines.append("| Project | ID | Type | Label | Last processed | Enabled |")
         lines.append("|---|---|---|---|---|---|")
         lines.append("")
-        lines.append(
-            "_No M365 sources registered. Use add_sync_source to register._"
-        )
+        lines.append("_No M365 sources registered. Use add_sync_source to register._")
     else:
         lines.append("| Project | ID | Type | Label | Last processed | Enabled |")
         lines.append("|---|---|---|---|---|---|")
