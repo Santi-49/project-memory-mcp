@@ -193,6 +193,43 @@ knowledge/deployment.md:
 
 LLMs skip files they don't need → cheaper, faster.
 
+### 5. Full-text RAG indexing
+
+All project files (except `_index.yaml`) are automatically indexed using TF-IDF (or embeddings) 
+for fast semantic search:
+
+```json
+{
+  "_rag_index.json": {
+    "docs": {
+      "projects/databuddy/knowledge/architecture.md": {
+        "tf": { "snowflake": 0.045, "migration": 0.032, ... },
+        "mtime": 1774796858.3323283,
+        "indexed_at": "2026-03-29T18:49:17.855188+00:00"
+      }
+    }
+  }
+}
+```
+
+**Every file in these directories is automatically indexed and searchable:**
+
+| Directory | Indexed | Purpose |
+|---|---|---|
+| `_global/people/` | ✅ All `.md` files | Team member profiles (auto-indexed) |
+| `_global/companies/` | ✅ All `.md` files | Partner and client information |
+| `projects/{slug}/knowledge/` | ✅ All `.md` files | Processed knowledge and summaries |
+| `projects/{slug}/correspondence/` | ✅ All `.md` files | Email, call, and message digests |
+| `projects/{slug}/updates/` | ✅ All `.md` files | Chronological project updates |
+| `projects/{slug}/decisions.md` | ✅ Single file | Decision log (append-only) |
+| `_index.yaml` files | ❌ Never | Auto-managed manifests (excluded) |
+
+Indexes are updated automatically when files change. Use the index for:
+- **Semantic search** — Find relevant context by meaning, not keywords
+- **Link discovery** — Understand what's related without reading everything  
+- **Context routing** — Route LLM queries to the most relevant files
+- **Token efficiency** — Read only what matters for the current task
+
 ---
 
 ## Documentation
