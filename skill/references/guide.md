@@ -192,3 +192,51 @@ Best practice before mutating existing content:
 | Unresolved `[mem:path]` tokens | `write_file`, `append_to_file` | Warning |
 | Project slugs must be unique | `create_project` | Error |
 | Dates must be YYYY-MM-DD | Pydantic model validation | Error |
+
+## Project memory as source of truth
+
+Once knowledge is processed and stored in the project memory filesystem, treat it
+as your source of truth. This avoids redundant M365 calls and conserves tokens.
+
+### Local-first principle
+
+1. **Read from memory first.** Before pulling data from SharePoint, Teams, or Outlook,
+   check if it's already summarized in:
+   - `projects/{slug}/knowledge/` — processed, indexed knowledge
+   - `projects/{slug}/updates/` — chronological project timeline
+   - `projects/{slug}/correspondence/*` — email/call/message summaries
+   - `projects/{slug}/decisions.md` — settled decisions with rationale
+
+2. **Avoid re-processing.** If a file has already been summarized and stored with
+   a source reference (e.g., `source: [sp:sp-contracts/msa-v2.pdf]`), do not
+   fetch and re-process the same source later. Instead:
+   - Call `read_file` on the knowledge entry
+   - Use `get_project_context` to load the summary into conversation
+   - Reference the local summary when answering questions
+
+3. **Token efficiency.** Network waterfalls (fetch from M365 → summarize → store)
+   are expensive. Once the summary is stored, the local Markdown file is your
+   canonical reference. Reuse it across sessions and calls.
+
+4. **Trust the processed metadata.** The `source:`, `processed:`, and `method:` fields
+   in knowledge entry frontmatter tell you exactly what you're looking at, when it
+   was processed, and how. Trust this metadata over re-fetching the source.
+
+### When to pull fresh from M365
+
+Re-pull from M365 sources only when:
+- The local entry is explicitly marked `stale_after: YYYY-MM-DD` and that date has passed
+- A user asks for updates to stale content ("What's changed since March?")
+- The source is newly registered and has never been processed before
+- You are asked to validate against a live source (rare, for compliance/audit only)
+
+### Reference pattern for processed content
+
+When citing processed knowledge, always include the local reference:
+  "According to our processed notes (from [sp:sp-contracts/msa-v2.pdf]),
+   the contract term is 24 months."
+
+This pattern:
+- Maintains auditability (reader can trace back to original)
+- Signals that this is a processed summary, not the raw source
+- Reduces risk of stale data (frontmatter shows last processed date)

@@ -10,6 +10,41 @@ M365 data enters the memory filesystem via:
 All memory MCP tools work without M365 connectivity.
 `resolve_m365_ref` returns local metadata only — it does **not** fetch live data.
 
+## Using local processed data as source of truth
+
+Once M365 content (SharePoint files, Teams messages, emails) is processed and stored
+in the project memory, **treat the local summary as your primary source**. This
+principle saves tokens and reduces latency.
+
+### Why prioritize local memory
+
+- **Processed summaries are cheaper.** A knowledge entry summarizing a 50-page
+  contract costs less to load from disk than re-fetching and re-summarizing from
+  SharePoint.
+- **Metadata tells the story.** Frontmatter fields (`source: [sp:...]`, `processed:`,
+  `method:`) document exactly what was done and when.
+- **Avoids redundant M365 calls.** SharePoint quotas and Teams message limits mean
+  re-fetching the same content is wasteful.
+
+### When to pull fresh from M365
+
+Re-pull from M365 sources only when:
+- The local entry is explicitly marked `stale_after: YYYY-MM-DD` and that date has passed
+- A user asks for updates to stale content ("What's changed since March?")
+- The source is newly registered and has never been processed before
+- You are asked to validate against a live source (rare, for compliance/audit only)
+
+### Reference pattern for processed content
+
+When citing processed knowledge, always include the local reference:
+  "According to our processed notes (from [sp:sp-contracts/msa-v2.pdf]),
+   the contract term is 24 months."
+
+This pattern:
+- Maintains auditability (reader can trace back to original)
+- Signals that this is a processed summary, not the raw source
+- Reduces risk of stale data (frontmatter shows last processed date)
+
 ## M365 reference syntax
 Use these tokens in Markdown file bodies or frontmatter to link content to M365 sources
 or to other internal workspace files. All tokens are parsed and indexed on every write.

@@ -298,13 +298,15 @@ No parameters. Use this when the refs index has drifted out of sync — for exam
 Create a global person profile in `_global/people/{slug}.md` and update the people manifest.
 
 Before creating, call `list_global_people` first (and optionally `list_global_companies` / `resolve_ref`) to avoid duplicate entities.
+`company` is required. Use `Other` only when the company is genuinely unknown.
+When possible, include `title`, `email`, `phone`, and `global_description` in the same call.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `slug` | string | yes | Kebab-case identifier (must be unique within people) |
 | `name` | string | yes | Full name |
 | `title` | string | no | Job title |
-| `company` | string | no | Associated company (defaults to `Other`) |
+| `company` | string | yes | Associated company. Use `Other` only when genuinely unknown |
 | `email` | string | no | Email address |
 | `phone` | string | no | Phone number |
 | `global_description` | string | no | Editable global description field inside the person profile |

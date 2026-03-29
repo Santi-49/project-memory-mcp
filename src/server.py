@@ -24,7 +24,12 @@ from filesystem import (
     to_kebab_case,
     validate_knowledge_frontmatter,
 )
-from guide import generate_guide, generate_m365_guide
+from guide import (
+    generate_guide,
+    generate_m365_guide,
+    generate_skill_guide,
+    generate_new_project_setup,
+)
 from models import (
     FolderManifest,
     ManifestEntry,
@@ -545,7 +550,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         slug: str,
         name: str,
         title: Optional[str] = None,
-        company: Optional[str] = None,
+        company: str = "",
         email: Optional[str] = None,
         phone: Optional[str] = None,
         global_description: Optional[str] = None,
@@ -556,6 +561,8 @@ def create_server(root: Path) -> fastmcp.FastMCP:
 
         Before creating, check existing entities first with list_global_people
         (and optionally list_global_companies / resolve_ref) to avoid duplicates.
+        company is required. Use "Other" only when the company is genuinely unknown.
+        Populate title/email/phone/global_description whenever available.
         Optionally set project_slug to link the new person to an existing project.
         """
         try:
@@ -581,17 +588,44 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                         "warnings": [],
                     }
 
+            company_value = company.strip()
+            if not company_value:
+                return {
+                    "error": "company is required (use 'Other' only if genuinely unknown)",
+                    "warnings": [],
+                }
+
             extra: dict[str, Any] = {}
             if title:
                 extra["Title"] = title
-            if company:
-                extra["Company"] = company
+            extra["Company"] = company_value
             if email:
                 extra["Email"] = email
             if phone:
                 extra["Phone"] = phone
             if global_description:
                 extra["Description"] = global_description
+
+            warnings: list[str] = []
+            if company_value.lower() == "other":
+                warnings.append(
+                    "Company set to 'Other'. Use a specific company whenever possible."
+                )
+
+            missing_fields: list[str] = []
+            if not title:
+                missing_fields.append("title")
+            if not email:
+                missing_fields.append("email")
+            if not phone:
+                missing_fields.append("phone")
+            if not global_description:
+                missing_fields.append("global_description")
+            if missing_fields:
+                warnings.append(
+                    "Person profile is sparse. Consider adding: "
+                    + ", ".join(missing_fields)
+                )
 
             path = fs.create_person(
                 slug, name, extra_fields=extra or None, description=description
@@ -605,7 +639,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                     "message": f"Person {name!r} created",
                     "linked_project": project_slug,
                 },
-                "warnings": [],
+                "warnings": warnings,
             }
         except ValueError as e:
             return {"error": str(e), "warnings": []}
@@ -997,6 +1031,16 @@ def create_server(root: Path) -> fastmcp.FastMCP:
     def get_m365_guide() -> str:
         """M365 integration reference — source registration, reference syntax, sync state tools."""
         return generate_m365_guide(mcp, root)
+
+    @mcp.resource("memory://skill")
+    def get_skill_guide() -> str:
+        """Skill pre-flight checklist and key rules to keep in mind before using any tool."""
+        return generate_skill_guide(mcp, root)
+
+    @mcp.resource("memory://new-project")
+    def get_new_project_setup() -> str:
+        """Step-by-step guide for initializing a new project — read this when creating a project."""
+        return generate_new_project_setup(mcp, root)
 
     return mcp
 

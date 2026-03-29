@@ -748,11 +748,37 @@ class TestMCPTools:
                 slug="jane-smith",
                 name="Jane Smith",
                 title="CTO",
+                company="Other",
                 email="jane@test.com",
             )
         )
         assert "error" not in r
         assert "Jane Smith" in r["result"]["message"]
+
+    def test_create_person_requires_company(self, mcp_server):
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "create_person",
+                slug="no-company",
+                name="No Company",
+            )
+        )
+        assert "error" in r
+        assert "company is required" in r["error"]
+
+    def test_create_person_sparse_profile_warning(self, mcp_server):
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "create_person",
+                slug="sparse-person",
+                name="Sparse Person",
+                company="Other",
+            )
+        )
+        assert "error" not in r
+        assert any("sparse" in w.lower() for w in r["warnings"])
 
     def test_create_person_with_project_slug_links_person(self, mcp_server):
         self._call(mcp_server, "create_project", slug="cp-link-proj", name="CP Link")
@@ -787,7 +813,13 @@ class TestMCPTools:
         assert "error" not in r
 
     def test_get_person(self, mcp_server):
-        self._call(mcp_server, "create_person", slug="get-person", name="Get Person")
+        self._call(
+            mcp_server,
+            "create_person",
+            slug="get-person",
+            name="Get Person",
+            company="Other",
+        )
         r = parse_result(self._call(mcp_server, "get_person", slug="get-person"))
         assert "error" not in r
         assert "Get Person" in r["result"]
@@ -834,7 +866,11 @@ class TestMCPTools:
 
     def test_edit_person_notes_tool(self, mcp_server):
         self._call(
-            mcp_server, "create_person", slug="notes-person", name="Notes Person"
+            mcp_server,
+            "create_person",
+            slug="notes-person",
+            name="Notes Person",
+            company="Other",
         )
 
         append_result = parse_result(
@@ -877,7 +913,13 @@ class TestMCPTools:
         assert "Get Corp" in r["result"]
 
     def test_resolve_ref(self, mcp_server):
-        self._call(mcp_server, "create_person", slug="ref-person", name="Ref Person")
+        self._call(
+            mcp_server,
+            "create_person",
+            slug="ref-person",
+            name="Ref Person",
+            company="Other",
+        )
         r = parse_result(self._call(mcp_server, "resolve_ref", slug="ref-person"))
         assert "error" not in r
         assert "Ref Person" in r["result"]["content"]
@@ -1172,9 +1214,19 @@ class TestListGlobalPeopleCompanies:
 
     def test_list_global_people_after_create(self, mcp_server):
         self._call(
-            mcp_server, "create_person", slug="alice-wonder", name="Alice Wonder"
+            mcp_server,
+            "create_person",
+            slug="alice-wonder",
+            name="Alice Wonder",
+            company="Other",
         )
-        self._call(mcp_server, "create_person", slug="bob-builder", name="Bob Builder")
+        self._call(
+            mcp_server,
+            "create_person",
+            slug="bob-builder",
+            name="Bob Builder",
+            company="Other",
+        )
         r = parse_result(self._call(mcp_server, "list_global_people"))
         assert "error" not in r
         names = [e["name"] for e in r["result"]]
@@ -1199,6 +1251,7 @@ class TestListGlobalPeopleCompanies:
             "create_person",
             slug="desc-person",
             name="Desc Person",
+            company="Other",
             description="A described person",
         )
         r = parse_result(self._call(mcp_server, "list_global_people"))
