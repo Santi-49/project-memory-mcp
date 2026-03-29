@@ -12,3 +12,4 @@
   - Handle casuistic where files can be manually modified (check last modified and las indexed)
   - Expose a tool to search files based on semantic meaning (parameters like project slug...)
 - Add auth to allow exposure to the internet
+- Add linear and jira integrations
