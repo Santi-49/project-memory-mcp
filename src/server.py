@@ -32,6 +32,7 @@ from templates import KNOWLEDGE_ENTRY_TEMPLATE
 # ---------------------------------------------------------------------------
 
 def create_server(root: Path) -> fastmcp.FastMCP:
+    root = root.resolve()  # ensure absolute so Path.relative_to() never fails
     fs = MemoryFS(root)
     fs.initialise()
 

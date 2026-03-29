@@ -69,6 +69,26 @@ Add the following to your `claude_desktop_config.json`:
 }
 ```
 
+### Debugging with MCP Inspector
+
+Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to interactively explore and test all tools from a browser UI:
+
+```bash
+npx @modelcontextprotocol/inspector python src/server.py --root ./memory-root
+```
+
+Then open `http://localhost:5173` to browse tools, call them with custom parameters, and inspect responses in real time.
+
+If using a virtual environment, point to the environment's Python directly:
+
+```bash
+# Windows
+npx @modelcontextprotocol/inspector .venv\Scripts\python.exe src/server.py --root ./memory-root
+
+# macOS / Linux
+npx @modelcontextprotocol/inspector .venv/bin/python src/server.py --root ./memory-root
+```
+
 ---
 
 ## Quick example
