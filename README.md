@@ -103,7 +103,7 @@ The server tracks sources from three M365 services:
 
 ```bash
 pip install -r requirements.txt
-python src/server.py
+python src/server.py --rag-backend embeddings
 ```
 
 **Requirements:** Python 3.13+, `fastmcp>=2.0.0`, `pyyaml>=6.0`, `pydantic>=2.0`
@@ -116,7 +116,7 @@ python src/server.py
 
 ```bash
 pip install -r requirements.txt
-python src/server.py  # Starts on default ./memory-root
+python src/server.py --rag-backend embeddings  # Recommended
 ```
 
 ### 2. Connect to Claude
@@ -127,7 +127,7 @@ Add to `claude_desktop_config.json`:
   "mcpServers": {
     "project-memory": {
       "command": "python",
-      "args": ["/path/to/src/server.py"]
+      "args": ["/path/to/src/server.py", "--rag-backend", "embeddings"]
     }
   }
 }
@@ -136,7 +136,7 @@ Add to `claude_desktop_config.json`:
 ### 3. Try the MCP Inspector
 
 ```bash
-npx @modelcontextprotocol/inspector python src/server.py
+npx @modelcontextprotocol/inspector python src/server.py --rag-backend embeddings
 # Visit http://localhost:5173
 ```
 
@@ -158,7 +158,7 @@ The server supports an HTTP transport mode for exposing it over the internet (e.
 
 2. Start the server in HTTP mode:
    ```bash
-   python src/server.py --transport http --host 0.0.0.0 --port 8000
+  python src/server.py --rag-backend embeddings --transport http --host 0.0.0.0 --port 8000
    ```
    The server prints `[auth] Bearer token auth enabled` when the token is loaded.
 

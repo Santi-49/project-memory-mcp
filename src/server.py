@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import secrets
+import sys
 import uuid
 from datetime import date
 from pathlib import Path
@@ -30,7 +31,12 @@ from filesystem import (
     to_kebab_case,
     validate_knowledge_frontmatter,
 )
-from rag import RAGEngine, RAG_BACKEND_TFIDF, RAG_BACKEND_EMBEDDINGS, DEFAULT_EMBEDDING_MODEL
+from rag import (
+    RAGEngine,
+    RAG_BACKEND_TFIDF,
+    RAG_BACKEND_EMBEDDINGS,
+    DEFAULT_EMBEDDING_MODEL,
+)
 from guide import (
     generate_guide,
     generate_m365_guide,
@@ -87,11 +93,19 @@ def create_server(
     root: Path,
     rag_backend: str = RAG_BACKEND_TFIDF,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    preload_embeddings: bool = True,
 ) -> fastmcp.FastMCP:
     root = root.resolve()  # ensure absolute so Path.relative_to() never fails
     fs = MemoryFS(root)
     fs.initialise()
     rag = RAGEngine(root, backend=rag_backend, embedding_model=embedding_model)
+    if rag_backend == RAG_BACKEND_EMBEDDINGS and preload_embeddings:
+        print(
+            f"[rag] Preloading embedding model '{embedding_model}' on startup...",
+            file=sys.stderr,
+        )
+        rag.warmup()
+        print("[rag] Embedding model preloaded.", file=sys.stderr)
 
     mcp = fastmcp.FastMCP(
         name="project-memory",
@@ -362,7 +376,9 @@ def create_server(
                 }
 
             if copy_instructions_from:
-                source_instructions = root / "projects" / copy_instructions_from / "_instructions.md"
+                source_instructions = (
+                    root / "projects" / copy_instructions_from / "_instructions.md"
+                )
                 if not source_instructions.exists():
                     return {
                         "error": f"Source project {copy_instructions_from!r} has no _instructions.md to copy from",
@@ -392,7 +408,9 @@ def create_server(
             )
 
             project_dir = fs.scaffold_project(
-                slug, project_meta, description=description,
+                slug,
+                project_meta,
+                description=description,
                 instructions_content=instructions_content,
             )
 
@@ -1047,6 +1065,9 @@ def create_server(
         the MCP server) and have now been re-indexed.
         """
         try:
+            print(
+                f"Rebuilding RAG index with force={force} for project={project_slug or 'ALL'}..."
+            )
             counts = rag.rebuild(project_slug=project_slug, force=force)
             total = counts["indexed"] + counts["skipped"] + counts["stale"]
             return {
@@ -1236,17 +1257,21 @@ def create_server(
 
             for entry_path, entry in refs_index.entries.items():
                 # Filter by project if specified
-                if project_slug and not entry_path.startswith(f"projects/{project_slug}/"):
+                if project_slug and not entry_path.startswith(
+                    f"projects/{project_slug}/"
+                ):
                     continue
 
                 for mcp_ref in entry.mcp_refs:
                     if mcp_ref.server == server:
                         if resource is None or mcp_ref.resource == resource:
-                            referencing_files.append({
-                                "path": entry_path,
-                                "server": mcp_ref.server,
-                                "resource": mcp_ref.resource,
-                            })
+                            referencing_files.append(
+                                {
+                                    "path": entry_path,
+                                    "server": mcp_ref.server,
+                                    "resource": mcp_ref.resource,
+                                }
+                            )
 
             return {
                 "result": {
@@ -1357,12 +1382,21 @@ Examples:
             f"(default: {DEFAULT_EMBEDDING_MODEL})"
         ),
     )
+    parser.add_argument(
+        "--no-preload-embeddings",
+        action="store_true",
+        help=(
+            "Disable embedding model preload on startup. "
+            "By default, embeddings backend preloads model at startup to avoid first-call latency."
+        ),
+    )
     args = parser.parse_args()
 
     server = create_server(
         args.root,
         rag_backend=args.rag_backend,
         embedding_model=args.embedding_model,
+        preload_embeddings=not args.no_preload_embeddings,
     )
 
     if args.transport == "http":
@@ -1371,9 +1405,7 @@ Examples:
         if auth_token:
             from starlette.middleware import Middleware
 
-            http_middleware = [
-                Middleware(BearerTokenMiddleware, token=auth_token)
-            ]
+            http_middleware = [Middleware(BearerTokenMiddleware, token=auth_token)]
             print("[auth] Bearer token auth enabled")
         else:
             http_middleware = None

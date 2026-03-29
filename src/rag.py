@@ -26,12 +26,16 @@ against the current on-disk modification time.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -51,15 +55,86 @@ _EMBEDDINGS_INDEX_FILE = "_rag_embeddings.json"
 
 _STOPWORDS = frozenset(
     {
-        "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-        "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-        "being", "have", "has", "had", "do", "does", "did", "will", "would",
-        "could", "should", "may", "might", "shall", "can", "it", "its",
-        "this", "that", "these", "those", "i", "me", "my", "we", "our",
-        "you", "your", "he", "him", "his", "she", "her", "they", "them",
-        "their", "what", "which", "who", "not", "no", "so", "as", "if",
-        "than", "too", "very", "just", "also", "more", "most", "then",
-        "about", "up", "out", "over", "after", "before", "since",
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "from",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "can",
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "they",
+        "them",
+        "their",
+        "what",
+        "which",
+        "who",
+        "not",
+        "no",
+        "so",
+        "as",
+        "if",
+        "than",
+        "too",
+        "very",
+        "just",
+        "also",
+        "more",
+        "most",
+        "then",
+        "about",
+        "up",
+        "out",
+        "over",
+        "after",
+        "before",
+        "since",
     }
 )
 
@@ -76,9 +151,7 @@ _MTIME_TOLERANCE = 0.001
 def tokenize(text: str) -> list[str]:
     """Return lowercase tokens from *text*, stripping stopwords and short tokens."""
     return [
-        t
-        for t in _TOKEN_RE.findall(text.lower())
-        if len(t) > 2 and t not in _STOPWORDS
+        t for t in _TOKEN_RE.findall(text.lower()) if len(t) > 2 and t not in _STOPWORDS
     ]
 
 
@@ -91,9 +164,7 @@ def term_frequency(tokens: list[str]) -> dict[str, float]:
     return {term: count / total for term, count in counts.items()}
 
 
-def cosine_similarity(
-    vec_a: dict[str, float], vec_b: dict[str, float]
-) -> float:
+def cosine_similarity(vec_a: dict[str, float], vec_b: dict[str, float]) -> float:
     """Cosine similarity between two sparse float vectors represented as dicts."""
     dot = sum(vec_a.get(t, 0.0) * v for t, v in vec_b.items())
     norm_a = math.sqrt(sum(v * v for v in vec_a.values()))
@@ -241,8 +312,7 @@ class _TFIDFBackend:
 
         query_tf = term_frequency(query_tokens)
         query_tfidf = {
-            term: tf_val * self._idf.get(term, 0.0)
-            for term, tf_val in query_tf.items()
+            term: tf_val * self._idf.get(term, 0.0) for term, tf_val in query_tf.items()
         }
 
         prefix = f"projects/{project_slug}/" if project_slug else None
@@ -304,8 +374,7 @@ class _TFIDFBackend:
             for term in doc["tf"]:
                 df[term] += 1
         self._idf = {
-            term: math.log((n + 1) / (count + 1)) + 1.0
-            for term, count in df.items()
+            term: math.log((n + 1) / (count + 1)) + 1.0 for term, count in df.items()
         }
 
     def _save(self) -> None:
@@ -504,11 +573,20 @@ class _EmbeddingsBackend:
     def indexed_count(self) -> int:
         return len(self._docs)
 
+    def warmup(self) -> None:
+        """Preload sentence-transformer model to avoid first-inference latency."""
+        self._get_model()
+
     # -- private helpers -----------------------------------------------------
 
     def _get_model(self):
         """Lazily load and cache the sentence-transformer model."""
         if self._model is None:
+            logger.warning(
+                "RAG embeddings model '%s' not loaded yet; loading now (may download on first run).",
+                self.model_name,
+            )
+            load_started = perf_counter()
             try:
                 from sentence_transformers import SentenceTransformer
             except ImportError as exc:
@@ -517,12 +595,33 @@ class _EmbeddingsBackend:
                     "Install it with:  pip install sentence-transformers"
                 ) from exc
             self._model = SentenceTransformer(self.model_name)
+            logger.warning(
+                "RAG embeddings model '%s' ready in %.2fs.",
+                self.model_name,
+                perf_counter() - load_started,
+            )
         return self._model
 
     def _encode(self, text: str) -> list[float]:
         """Encode *text* to a dense embedding vector (list of floats)."""
         model = self._get_model()
+        encode_started = perf_counter()
         emb = model.encode(text, convert_to_numpy=True)
+        elapsed = perf_counter() - encode_started
+        if elapsed >= 0.5:
+            logger.warning(
+                "RAG embeddings inference slow: %.3fs (chars=%d, model=%s).",
+                elapsed,
+                len(text),
+                self.model_name,
+            )
+        else:
+            logger.info(
+                "RAG embeddings inference completed in %.3fs (chars=%d, model=%s).",
+                elapsed,
+                len(text),
+                self.model_name,
+            )
         return emb.tolist()
 
     def _save(self) -> None:
@@ -670,3 +769,9 @@ class RAGEngine:
     def indexed_count(self) -> int:
         """Return the number of documents currently in the index."""
         return self._impl.indexed_count()
+
+    def warmup(self) -> None:
+        """Preload backend resources (embeddings model) when supported."""
+        warmup_fn = getattr(self._impl, "warmup", None)
+        if callable(warmup_fn):
+            warmup_fn()
