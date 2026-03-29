@@ -117,7 +117,7 @@ def _iter_indexable_files(search_root: Path, root: Path):
         if p.is_relative_to(trash_dir):
             continue
         try:
-            rel = str(p.relative_to(root))
+            rel = p.relative_to(root).as_posix()
             mtime = p.stat().st_mtime
         except (OSError, ValueError):
             continue
@@ -151,7 +151,7 @@ class _TFIDFBackend:
             return "skipped"
         try:
             mtime = path.stat().st_mtime
-            rel = str(path.relative_to(self.root))
+            rel = path.relative_to(self.root).as_posix()
         except (OSError, ValueError):
             return "skipped"
 
@@ -176,7 +176,7 @@ class _TFIDFBackend:
 
     def remove_file(self, path: Path) -> None:
         try:
-            rel = str(path.relative_to(self.root))
+            rel = path.relative_to(self.root).as_posix()
         except ValueError:
             return
         if rel in self._docs:
@@ -368,7 +368,7 @@ class _EmbeddingsBackend:
             return "skipped"
         try:
             mtime = path.stat().st_mtime
-            rel = str(path.relative_to(self.root))
+            rel = path.relative_to(self.root).as_posix()
         except (OSError, ValueError):
             return "skipped"
 
@@ -392,7 +392,7 @@ class _EmbeddingsBackend:
 
     def remove_file(self, path: Path) -> None:
         try:
-            rel = str(path.relative_to(self.root))
+            rel = path.relative_to(self.root).as_posix()
         except ValueError:
             return
         if rel in self._docs:
