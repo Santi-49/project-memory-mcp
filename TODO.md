@@ -13,3 +13,9 @@
   - Expose a tool to search files based on semantic meaning (parameters like project slug...)
 - Add auth to allow exposure to the internet
 - Add linear and jira integrations
+- Add custom project instructions
+  - In the create project skill prompt the model to ask the user if it wants to add specific instuctions or coppy them from another project
+  - The instruction can model the LLM behaviour in any way (if not alredy mentioned on the skill)
+  - it also details how it should behave if it has other MCPs (connectors) available
+- Add generic MCP resouce compatibility
+  - The same way it allows for sharepoint, teams, outlook reference it should also allow references to not specifically implemented mcp connections the LLM model might have
