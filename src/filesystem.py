@@ -21,6 +21,7 @@ from models import (
     KnowledgeFrontmatter,
     M365Ref,
     ManifestEntry,
+    McpRef,
     ProjectIndexEntry,
     ProjectMeta,
     ProjectStatus,
@@ -37,6 +38,7 @@ from templates import (
     KNOWLEDGE_ENTRY_TEMPLATE,
     PERSON_TEMPLATE,
     PROJECT_GUIDE_TEMPLATE,
+    PROJECT_INSTRUCTIONS_TEMPLATE,
     PROJECT_META_TEMPLATE,
     PROJECT_STATUS_TEMPLATE,
     ROOT_MANIFEST_TEMPLATE,
@@ -53,6 +55,8 @@ _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _M365_REF_RE = re.compile(r"\[(tm|ol|sp):([a-z0-9-]+)(?:/([^\]]*))?\]")
 # Internal cross-reference: [mem:projects/proj/knowledge/file.md]
 _MEM_REF_RE = re.compile(r"\[mem:([^\]]+)\]")
+# Generic MCP reference: [mcp:server-name/resource-path]
+_MCP_REF_RE = re.compile(r"\[mcp:([a-z0-9][-a-z0-9]*)(?:/([^\]]*))?\]")
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +248,7 @@ def _replace_markdown_section(content: str, heading: str, body: str) -> str:
 
 
 def parse_refs(content: str) -> dict[str, Any]:
-    """Parse @refs, #tags, [[links]], [m365:] and [mem:] tokens from markdown content."""
+    """Parse @refs, #tags, [[links]], [m365:], [mem:], and [mcp:] tokens from markdown content."""
     refs = list(set(_REF_RE.findall(content)))
     tags = list(set(_TAG_RE.findall(content)))
     links = list(set(_LINK_RE.findall(content)))
@@ -280,12 +284,26 @@ def parse_refs(content: str) -> dict[str, Any]:
             internal_refs.append(InternalRef(path=path))
         except Exception:
             continue
+    mcp_refs: list[McpRef] = []
+    seen_mcp: set[str] = set()
+    for m in _MCP_REF_RE.finditer(content):
+        try:
+            server = m.group(1)
+            resource = m.group(2) or None
+            key = f"{server}:{resource}"
+            if key in seen_mcp:
+                continue
+            seen_mcp.add(key)
+            mcp_refs.append(McpRef(server=server, resource=resource))
+        except Exception:
+            continue
     return {
         "refs": refs,
         "tags": tags,
         "links": links,
         "m365_refs": m365_refs,
         "internal_refs": internal_refs,
+        "mcp_refs": mcp_refs,
     }
 
 
@@ -440,6 +458,7 @@ class MemoryFS:
         for entry_data in data.get("entries", {}).values():
             entry_data.setdefault("m365_refs", [])
             entry_data.setdefault("internal_refs", [])
+            entry_data.setdefault("mcp_refs", [])
         return RefsIndex(**data)
 
     def save_refs_index(self, index: RefsIndex) -> None:
@@ -447,7 +466,7 @@ class MemoryFS:
         path.write_text(json.dumps(index.model_dump(), indent=2), encoding="utf-8")
 
     def update_refs_for_file(self, rel_path: str, content: str) -> None:
-        """Parse content for refs/tags/links/m365_refs/internal_refs and update _refs-index.json."""
+        """Parse content for refs/tags/links/m365_refs/internal_refs/mcp_refs and update _refs-index.json."""
         parsed = parse_refs(content)
         refs_index = self.load_refs_index()
         refs_index.entries[rel_path] = RefsIndexEntry(
@@ -457,6 +476,7 @@ class MemoryFS:
             links=parsed["links"],
             m365_refs=parsed.get("m365_refs", []),
             internal_refs=parsed.get("internal_refs", []),
+            mcp_refs=parsed.get("mcp_refs", []),
         )
         self.save_refs_index(refs_index)
 
@@ -626,6 +646,7 @@ class MemoryFS:
         slug: str,
         meta: ProjectMeta,
         description: Optional[str] = None,
+        instructions_content: Optional[str] = None,
     ) -> Path:
         """Create the full project folder tree."""
         project_dir = self.root / "projects" / slug
@@ -657,6 +678,17 @@ class MemoryFS:
         (project_dir / "_status.md").write_text(
             PROJECT_STATUS_TEMPLATE.format(name=meta.name, date=today), encoding="utf-8"
         )
+
+        # _instructions.md (custom LLM behavior rules — loaded right after _status.md)
+        if instructions_content:
+            (project_dir / "_instructions.md").write_text(
+                instructions_content, encoding="utf-8"
+            )
+        else:
+            (project_dir / "_instructions.md").write_text(
+                PROJECT_INSTRUCTIONS_TEMPLATE.format(name=meta.name),
+                encoding="utf-8",
+            )
 
         # _guide.md (static, human-editable)
         (project_dir / "_guide.md").write_text(PROJECT_GUIDE_TEMPLATE, encoding="utf-8")
@@ -1542,6 +1574,7 @@ class MemoryFS:
                 links=parsed["links"],
                 m365_refs=parsed.get("m365_refs", []),
                 internal_refs=parsed.get("internal_refs", []),
+                mcp_refs=parsed.get("mcp_refs", []),
             )
         self.save_refs_index(new_index)
         return len(new_index.entries)

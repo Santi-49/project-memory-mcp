@@ -81,3 +81,39 @@ When saving M365 content manually (without the sync pipeline):
 4. Save to the correct folder using the routing table (e.g. `correspondence/email-threads.md` for email summaries)
 5. Use M365 reference tokens in the body/frontmatter to link back to the original source
 6. Update the watermark: `update_sync_state`
+
+## Generic MCP Resources as complement to M365
+
+Where M365 tokens (`[sp:]`, `[tm:]`, `[ol:]`) target specific services, **generic MCP reference tokens** (`[mcp:server-name/resource-path]`) provide a lightweight way to document dependencies on ANY external MCP server.
+
+### When to use generic MCP refs
+
+| Scenario | Use Token | Example |
+|---|---|---|
+| Linking to a GitHub repo | `[mcp:github/...]` | `[mcp:github/repos/acme/backend-api]` |
+| Referencing a Jira issue | `[mcp:jira/...]` | `[mcp:jira/issues/INFRA-456]` |
+| Pointing to Confluence page | `[mcp:confluence/...]` | `[mcp:confluence/spaces/DEV/pages/architecture]` |
+| Linear issue tracker | `[mcp:linear/...]` | `[mcp:linear/issues/TEAM-123]` |
+| Any other MCP-accessible resource | `[mcp:.../.../...]` | `[mcp:slack/channels/engineering]` |
+
+### Key differences from M365 refs
+
+| Aspect | M365 Refs | Generic MCP Refs |
+|---|---|---|
+| Registration | **Required** via `add_sync_source` | **Not required** — advisory only |
+| Watermarks | Tracked in `_sync.yaml` | Not tracked (not synced) |
+| Use case | Automated fetch/sync pipelines | Documentation, cross-references, future integration |
+| Resolution | `resolve_m365_ref` checks live metadata | `resolve_mcp_ref` returns local cross-reference map |
+
+### Example usage
+
+Inside project memory, reference an external resource:
+```markdown
+# Architecture Decision
+
+We store API documentation in [mcp:github/repos/acme/backend-api] and decision records
+in [mcp:confluence/spaces/ARCH/pages/decisions].
+Related Jira epic: [mcp:jira/issues/INFRA-999].
+```
+
+If the referenced MCP server is available in your session, you can then fetch the resource directly using that server's tools.

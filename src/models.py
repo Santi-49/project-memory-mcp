@@ -141,6 +141,13 @@ class M365Ref(BaseModel):
     message_id: Optional[str] = None  # for tm/ol refs (everything after first /)
 
 
+class McpRef(BaseModel):
+    """A parsed generic MCP reference token ([mcp:server-name/resource-path])."""
+
+    server: str  # MCP server name (e.g. "github", "jira", "confluence")
+    resource: str | None = None  # resource path within the server
+
+
 class InternalRef(BaseModel):
     """A parsed internal cross-reference token ([mem:path/to/file.md])."""
 
@@ -156,6 +163,7 @@ class RefsIndexEntry(BaseModel):
     links: list[str] = []
     m365_refs: list[M365Ref] = []
     internal_refs: list[InternalRef] = []
+    mcp_refs: list[McpRef] = []
 
 
 class RefsIndex(BaseModel):

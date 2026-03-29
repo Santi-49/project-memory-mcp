@@ -140,9 +140,12 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         in this conversation, you MUST do so before attempting to use this tool or
         any other tool in this project memory server!
 
-        Lightweight (default): _status.md + _meta.yaml + rendered _index.yaml.
+        Lightweight (default): _status.md + _instructions.md + _meta.yaml + rendered _index.yaml.
         Deep (deep=True): additionally includes knowledge/_index.yaml manifest
         and people.md content.
+
+        _instructions.md contains custom LLM behavior rules for this project.
+        You MUST follow any instructions defined in that file when working with this project.
         """
         try:
             project_dir = root / "projects" / slug
@@ -161,6 +164,14 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             if not status_path.exists():
                 warnings.append(f"_status.md is missing for project {slug!r}")
 
+            # _instructions.md — loaded right after status (custom LLM behavior rules)
+            instructions_path = project_dir / "_instructions.md"
+            instructions_content = (
+                instructions_path.read_text(encoding="utf-8")
+                if instructions_path.exists()
+                else None
+            )
+
             meta_path = project_dir / "_meta.yaml"
             if not meta_path.exists():
                 warnings.append(f"_meta.yaml is missing for project {slug!r}")
@@ -172,6 +183,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
 
             result: dict[str, Any] = {
                 "status": status_content,
+                "instructions": instructions_content,
                 "meta": meta_content,
                 "manifest": manifest_text,
             }
@@ -282,8 +294,23 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         type: str = "internal",
         meta: Optional[dict[str, Any]] = None,
         description: Optional[str] = None,
+        instructions: Optional[str] = None,
+        copy_instructions_from: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Create a new project with full folder scaffold."""
+        """Create a new project with full folder scaffold.
+
+        IMPORTANT: Before creating the project, ask the user:
+        1. Would you like to add custom instructions for how I should behave on this project?
+           (e.g., preferred tone, language, domain terminology, response format)
+        2. Would you like to copy instructions from an existing project?
+           (provide copy_instructions_from="{slug}" if yes)
+        3. Do you have other MCP connectors I should use for this project?
+           (e.g., GitHub, Jira, Confluence, Linear — these go in the instructions)
+
+        If the user provides custom instructions, pass them via the `instructions` parameter.
+        If they want to copy from another project, use `copy_instructions_from`.
+        If neither, a default template is scaffolded for later editing.
+        """
         try:
             # Validate slug
             kebab = to_kebab_case(slug)
@@ -316,6 +343,31 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                     "warnings": [],
                 }
 
+            # Resolve instructions content
+            instructions_content: Optional[str] = None
+            warnings: list[str] = []
+
+            if copy_instructions_from and instructions:
+                return {
+                    "error": "Cannot use both 'instructions' and 'copy_instructions_from'. Choose one.",
+                    "warnings": [],
+                }
+
+            if copy_instructions_from:
+                source_instructions = root / "projects" / copy_instructions_from / "_instructions.md"
+                if not source_instructions.exists():
+                    return {
+                        "error": f"Source project {copy_instructions_from!r} has no _instructions.md to copy from",
+                        "warnings": [],
+                    }
+                instructions_content = source_instructions.read_text(encoding="utf-8")
+                warnings.append(
+                    f"Instructions copied from project {copy_instructions_from!r}. "
+                    "Review and customize them for this project."
+                )
+            elif instructions:
+                instructions_content = instructions
+
             today = date.today().isoformat()
             project_meta = ProjectMeta(
                 id=str(uuid.uuid4()),
@@ -332,7 +384,8 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             )
 
             project_dir = fs.scaffold_project(
-                slug, project_meta, description=description
+                slug, project_meta, description=description,
+                instructions_content=instructions_content,
             )
 
             return {
@@ -340,8 +393,9 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                     "slug": slug,
                     "path": str(project_dir.relative_to(root)),
                     "message": f"Project {name!r} created at projects/{slug}",
+                    "has_custom_instructions": bool(instructions_content),
                 },
-                "warnings": [],
+                "warnings": warnings,
             }
         except ValueError as e:
             return {"error": str(e), "warnings": []}
@@ -1053,6 +1107,65 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             if "error" in result:
                 return {"error": result["error"], "warnings": []}
             return {"result": result, "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def resolve_mcp_ref(ref: str, project_slug: Optional[str] = None) -> dict[str, Any]:
+        """Resolve a generic MCP reference token to its local cross-reference metadata.
+
+        ref: e.g. "mcp:github/repos/acme/backend" or "[mcp:jira/issues/PROJ-123]"
+
+        Returns files that reference this MCP server/resource.
+        Unlike M365 refs, generic MCP refs do not require source registration.
+        They are advisory tokens — use them to document which external MCP servers
+        and resources are relevant to project content.
+
+        If the named MCP server is available in this session, you should use its
+        tools to fetch the referenced resource. If not available, the ref still
+        documents the dependency for future sessions.
+        """
+        try:
+            # Strip brackets if present
+            clean = ref.strip().lstrip("[").rstrip("]")
+            if clean.startswith("mcp:"):
+                clean = clean[4:]
+
+            parts = clean.split("/", 1)
+            server = parts[0]
+            resource = parts[1] if len(parts) > 1 else None
+
+            # Find files that reference this MCP server
+            refs_index = fs.load_refs_index()
+            referencing_files: list[dict[str, Any]] = []
+
+            for entry_path, entry in refs_index.entries.items():
+                # Filter by project if specified
+                if project_slug and not entry_path.startswith(f"projects/{project_slug}/"):
+                    continue
+
+                for mcp_ref in entry.mcp_refs:
+                    if mcp_ref.server == server:
+                        if resource is None or mcp_ref.resource == resource:
+                            referencing_files.append({
+                                "path": entry_path,
+                                "server": mcp_ref.server,
+                                "resource": mcp_ref.resource,
+                            })
+
+            return {
+                "result": {
+                    "server": server,
+                    "resource": resource,
+                    "referencing_files": referencing_files,
+                    "hint": (
+                        f"If the MCP server '{server}' is available in this session, "
+                        f"use its tools to access the referenced resource. "
+                        f"If not available, treat this as documentation of an external dependency."
+                    ),
+                },
+                "warnings": [],
+            }
         except Exception as e:
             return {"error": str(e), "warnings": []}
 

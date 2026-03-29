@@ -1,0 +1,12 @@
+# Project metadata — auto-populated by create_project, human-editable thereafter.
+id: "{id}"
+slug: "{slug}"
+name: "{name}"
+status: "{status}"
+type: "{type}"
+company: null        # @company-slug
+owner: null          # @person-slug
+team: []             # list of @person-slugs
+tags: []
+created: "{created}"
+updated: "{updated}"
