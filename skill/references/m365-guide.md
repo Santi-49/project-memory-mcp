@@ -12,82 +12,23 @@ All memory MCP tools work without M365 connectivity.
 
 ## Using local processed data as source of truth
 
-Once M365 content (SharePoint files, Teams messages, emails) is processed and stored
-in the project memory, **treat the local summary as your primary source**. This
-principle saves tokens and reduces latency.
+See the full **local-first decision tree** in [`quick-reference.md`](quick-reference.md#project-memory-as-source-of-truth--the-principle).
 
-### Why prioritize local memory
-
-- **Processed summaries are cheaper.** A knowledge entry summarizing a 50-page
-  contract costs less to load from disk than re-fetching and re-summarizing from
-  SharePoint.
-- **Metadata tells the story.** Frontmatter fields (`source: [sp:...]`, `processed:`,
-  `method:`) document exactly what was done and when.
-- **Avoids redundant M365 calls.** SharePoint quotas and Teams message limits mean
-  re-fetching the same content is wasteful.
-
-### When to pull fresh from M365
-
-Re-pull from M365 sources only when:
-- The local entry is explicitly marked `stale_after: YYYY-MM-DD` and that date has passed
-- A user asks for updates to stale content ("What's changed since March?")
-- The source is newly registered and has never been processed before
-- You are asked to validate against a live source (rare, for compliance/audit only)
-
-### Reference pattern for processed content
-
-When citing processed knowledge, always include the local reference:
-  "According to our processed notes (from [sp:sp-contracts/msa-v2.pdf]),
-   the contract term is 24 months."
-
-This pattern:
-- Maintains auditability (reader can trace back to original)
-- Signals that this is a processed summary, not the raw source
-- Reduces risk of stale data (frontmatter shows last processed date)
+Inline summary:
+- **Primary principle:** Once M365 content is processed and stored in project memory,
+  treat the local summary as your primary source — saves tokens, reduces latency
+- **When to use local:** Knowledge exists in `knowledge/`, `correspondence/`, `updates/` with `source:` frontmatter
+- **When to fetch fresh:** Only if `stale_after:` date passed, user asks for updates, source is new, or audit required
+- **Citation pattern:** "According to our processed notes (from [sp:sp-contracts/msa-v2.pdf]), ..."
 
 ## M365 reference syntax
-Use these tokens in Markdown file bodies or frontmatter to link content to M365 sources
-or to other internal workspace files. All tokens are parsed and indexed on every write.
 
-| Token | Meaning |
-|---|---|
-| `[tm:source-id]` | Teams channel reference |
-| `[tm:source-id/message-id]` | Specific Teams message |
-| `[ol:source-id]` | Outlook folder/thread reference |
-| `[ol:source-id/message-id]` | Specific email message |
-| `[sp:source-id]` | SharePoint library root |
-| `[sp:source-id/path/to/file.pdf]` | Specific SharePoint file |
-| `[mem:projects/proj/notes/x.md]` | Internal cross-reference to another workspace file |
+See the complete token table in [`quick-reference.md`](quick-reference.md#reference-token-syntax).
 
-**`source-id`** (for M365 tokens) is the `id` field from `_sync.yaml` sources — **not** a raw M365 ID.
-You must register sources with `add_sync_source` before using their IDs in tokens.
-
-### Examples
-
-In a knowledge entry body:
-```
-This contract was reviewed in [sp:sp-contracts/msa-v2.pdf].
-Related background in [mem:projects/acme/knowledge/legal-context.md].
-```
-
-In correspondence:
-```
-Thread summary pulled from [ol:outlook-internal/AAMkAGI2...].
-```
-
-In decisions.md:
-```
-Architecture decision confirmed on call [tm:teams-general/123456789]
-```
-
-knowledge/ frontmatter — multiple sources:
-```yaml
-source:
-  - "[sp:sp-contracts/msa-v2.pdf]"
-  - "[mem:projects/acme/correspondence/q1-thread.md]"
-```
-
-Use `get_related_files` to trace bidirectional links for any workspace file.
+**Critical reminder:**
+- `source-id` is the `id` field from `_sync.yaml` sources — **not** a raw M365 ID
+- You must register sources with `add_sync_source` before using their IDs in `[sp:]`, `[tm:]`, `[ol:]` tokens
+- Use `get_related_files` to trace bidirectional links for any workspace file
 
 ## Source registry
 Sources are registered per-project in `_sync.yaml` via `add_sync_source`.

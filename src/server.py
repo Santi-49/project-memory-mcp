@@ -27,6 +27,7 @@ from filesystem import (
 from guide import (
     generate_guide,
     generate_m365_guide,
+    generate_quick_reference,
     generate_skill_guide,
     generate_new_project_setup,
 )
@@ -1031,6 +1032,11 @@ def create_server(root: Path) -> fastmcp.FastMCP:
     def get_m365_guide() -> str:
         """M365 integration reference — source registration, reference syntax, sync state tools."""
         return generate_m365_guide(mcp, root)
+
+    @mcp.resource("memory://quick-reference")
+    def get_quick_reference() -> str:
+        """Quick reference for tokens, filesystem rules, and tool parameters."""
+        return generate_quick_reference(mcp, root)
 
     @mcp.resource("memory://skill")
     def get_skill_guide() -> str:

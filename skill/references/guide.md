@@ -118,30 +118,12 @@ If unsure between folders:
 | `update_person` | slug | Update structured fields for a person |
 
 ## Reference syntax
-Use these tokens anywhere in Markdown file bodies or frontmatter fields.
-Parsed and indexed by the server on every write.
+See the complete token table in [`quick-reference.md`](quick-reference.md#reference-token-syntax).
 
-| Token | Resolves to |
-|---|---|
-| `@person-slug` | `_global/people/{slug}.md` |
-| `@company-slug` | `_global/companies/{slug}.md` |
-| `#tag` | canonical list in `_global/tags.md` |
-| `[[project-slug]]` | `projects/{slug}/` |
-| `[mem:projects/proj/notes/x.md]` | internal cross-reference to another workspace file |
-| `[sp:source-id/path]` | SharePoint document (registered in `_sync.yaml`) |
-| `[tm:source-id/message-id]` | Teams message (registered in `_sync.yaml`) |
-| `[ol:source-id/message-id]` | Outlook email (registered in `_sync.yaml`) |
-
-Unresolved `@refs` and unresolved `[mem:]` refs produce warnings, not errors.
-File is still written — warnings are returned in the tool response.
-
-knowledge/ entries may list multiple sources in frontmatter:
-```yaml
-source: "[sp:sp-contracts/msa-v2.pdf]"        # single source
-source:                                         # multiple sources
-  - "[sp:sp-contracts/msa-v2.pdf]"
-  - "[mem:projects/acme/correspondence/q1-thread.md]"
-```
+Key reminders:
+- All M365 tokens (`[sp:]`, `[tm:]`, `[ol:]`) require source registration via `add_sync_source` first
+- `source-id` is the `id` field from `_sync.yaml`, not raw M365 IDs
+- Multiple sources in `knowledge/` frontmatter are supported (see quick reference)
 
 ## Key schemas
 
@@ -174,24 +156,12 @@ name, description, read_when, stale_after
 
 ## Filesystem rules
 
+See the full severity matrix in [`quick-reference.md`](quick-reference.md#filesystem-rules--severity-matrix).
+
 Best practice before mutating existing content:
 - Read current content first (`get_person`, `get_company`, `get_project_context`, `read_file`)
 - Then apply targeted updates to avoid unintentionally overwriting newer notes or fields
 - Before `create_person`/`create_company`, check existing entities first (`list_global_people`/`list_global_companies`)
-
-| Rule | Trigger | Severity |
-|---|---|---|
-| Destructive operations — ask user first | `delete_project` | Ask User First |
-| Path must stay inside memory root | Any path argument | Error |
-| Filenames must be kebab-case | `write_file`, `create_*` | Error |
-| `updates/` and `decisions.md` append-only | `write_file` (use `append_to_file` instead) | Error |
-| `_index.yaml` not writable or readable | `write_file`, `append_to_file`, `read_file` | Error |
-| `projects/*/people.md` is auto-managed | `write_file`, `delete_file` | Error |
-| Knowledge entries require frontmatter | `write_file` on `knowledge/*.md` | Warning |
-| Unresolved `@ref` tokens | `write_file`, `append_to_file` | Warning |
-| Unresolved `[mem:path]` tokens | `write_file`, `append_to_file` | Warning |
-| Project slugs must be unique | `create_project` | Error |
-| Dates must be YYYY-MM-DD | Pydantic model validation | Error |
 
 ## Project memory as source of truth
 

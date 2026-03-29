@@ -4,8 +4,11 @@ These resources are read from static files in the skill/references/ directory,
 which serves as the single source of truth for all server documentation.
 
 To update the guides:
-  - Edit skill/references/guide.md
-  - Edit skill/references/m365-guide.md
+  - Edit skill/references/quick-reference.md (tokens, rules, common parameters)
+  - Edit skill/references/guide.md (server guide, tool inventory, folder routing)
+  - Edit skill/references/m365-guide.md (M365 integration guide)
+  - Edit skill/SKILL.md (pre-flight checklist)
+  - Edit skill/references/creating-new-project.md (project initialization steps)
 
 The server always reads from these files; no code generation is needed.
 """
@@ -17,6 +20,38 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import fastmcp
+
+
+def generate_quick_reference(mcp: "fastmcp.FastMCP", root: Path) -> str:
+    """Read and return the quick reference from skill/references/quick-reference.md.
+
+    The quick reference is the single source of truth for reference tokens,
+    filesystem rules, and common tool parameters.
+    To update it, edit skill/references/quick-reference.md directly.
+
+    Never raises — returns a fallback string on error.
+    """
+    try:
+        # Find skill/references relative to this file
+        skill_dir = Path(__file__).parent.parent / "skill" / "references"
+        quick_ref_file = skill_dir / "quick-reference.md"
+
+        if quick_ref_file.exists():
+            return quick_ref_file.read_text(encoding="utf-8")
+
+        # Fallback if file not found
+        return (
+            f"# Quick Reference — Tokens, Rules, and Parameters\n\n"
+            f"_Could not load skill/references/quick-reference.md_\n\n"
+            f"The quick reference file should be present in skill/references/ directory.\n"
+            f"See memory://guide for complete documentation."
+        )
+    except Exception as exc:  # pragma: no cover
+        return (
+            f"# Quick Reference — Tokens, Rules, and Parameters\n\n"
+            f"_Error loading quick reference: {exc}_\n\n"
+            f"See memory://guide for complete documentation."
+        )
 
 
 def generate_guide(mcp: "fastmcp.FastMCP", root: Path) -> str:

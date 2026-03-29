@@ -19,19 +19,20 @@ They are short but critical — skipping them causes structural mistakes that ar
 to undo (wrong folder routing, missing frontmatter, broken @ref tokens, unregistered
 M365 sources).
 
-## Step 1 — Read the server guide
+## Step 1 — Quick reference, then read the server guide
 
-Read [`references/guide.md`](references/guide.md) now.
+First, review [`references/quick-reference.md`](references/quick-reference.md) for:
 
-It covers:
+- Reference token syntax (single canonical table)
+- Filesystem rules severity matrix
+- Project memory as source of truth (local-first decision tree)
+
+Then read [`references/guide.md`](references/guide.md) for:
 
 - Root and project folder layout (where things live)
 - **Folder routing rules** — which folder to use for each type of content
 - Full tool inventory with required parameters
-- Reference token syntax (`@person-slug`, `[sp:…]`, `[tm:…]`, `[ol:…]`, `[mem:…]`)
 - Key schemas for `_meta.yaml`, `knowledge/` frontmatter, `_index.yaml`
-- Filesystem rules and what triggers errors vs. warnings
-- **Project memory as source of truth** — why to prioritize local knowledge over M365 re-fetches
 
 ## Step 2 — Read the M365 integration guide
 
@@ -60,26 +61,14 @@ These are the most commonly violated rules — worth internalising before you st
    `correspondence/` for email/call/chat summaries, `updates/` for the chronological
    log, `notes/` for drafts. See the routing table in `references/guide.md`.
 
-4. **Project memory is source of truth.** Once knowledge is processed and stored
-   (marked with `source: [sp:...]`, `[tm:...]`, or `[ol:...]`), treat the local
-   summary as your primary source. Avoid re-fetching and re-processing the same
-   M365 content multiple times — it wastes tokens. Only re-fetch if content is
-   marked `stale_after: YYYY-MM-DD` and expired, or if user explicitly asks for
-   updates.
+4. **Know the filesystem rules.** See the severity matrix in `references/quick-reference.md`.
+   Key constraints: kebab-case filenames, append-only `updates/` and `decisions.md`,
+   auto-managed `people.md` and `companies.md`, YAML frontmatter required in `knowledge/`.
 
-5. **knowledge/ entries require YAML frontmatter.** Every file under `knowledge/`
-   needs `source`, `processed`, and `method` fields or you'll get warnings.
-
-6. **`updates/` and `decisions.md` are append-only.** Use `append_to_file`, never
-   `write_file`, for those paths.
-
-7. **Register M365 sources before using M365 refs.** If you're linking content to a
-   SharePoint file, Teams message, or Outlook email using `[sp:…]`, `[tm:…]`, or
-   `[ol:…]` tokens, the source-id must first be registered via `add_sync_source`.
-   Unregistered source-ids will produce unresolved-ref warnings and won't be
-   resolvable later.
-
-8. **Filenames must be kebab-case.** `email-threads.md` ✓ `Email Threads.md` ✗
+5. **Project memory is source of truth.** See the local-first decision tree in
+   `references/quick-reference.md`. Once knowledge is processed and stored, use the
+   local summary as your primary source. Avoid re-fetching the same M365 content
+   multiple times — it wastes tokens.
 
 ## Step 4 — If you're creating a new project
 
