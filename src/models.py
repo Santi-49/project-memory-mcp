@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -54,7 +54,7 @@ class ProjectMeta(BaseModel):
 class KnowledgeFrontmatter(BaseModel):
     """Frontmatter for knowledge/ entries."""
 
-    source: Optional[str] = None
+    source: Optional[Union[str, List[str]]] = None
     processed: Optional[str] = None
     method: Optional[str] = None
     model: Optional[str] = None
@@ -132,6 +132,21 @@ class ProjectsIndex(BaseModel):
     projects: list[ProjectIndexEntry] = []
 
 
+class M365Ref(BaseModel):
+    """A parsed M365 reference token ([tm:], [ol:], [sp:])."""
+
+    type: str  # "tm", "ol", or "sp"
+    source_id: str
+    path: Optional[str] = None  # for sp refs (everything after first /)
+    message_id: Optional[str] = None  # for tm/ol refs (everything after first /)
+
+
+class InternalRef(BaseModel):
+    """A parsed internal cross-reference token ([mem:path/to/file.md])."""
+
+    path: str  # root-relative path to the referenced file
+
+
 class RefsIndexEntry(BaseModel):
     """Per-file refs entry in _refs-index.json."""
 
@@ -139,9 +154,72 @@ class RefsIndexEntry(BaseModel):
     refs: list[str] = []
     tags: list[str] = []
     links: list[str] = []
+    m365_refs: list[M365Ref] = []
+    internal_refs: list[InternalRef] = []
 
 
 class RefsIndex(BaseModel):
     """Represents _refs-index.json."""
 
     entries: dict[str, RefsIndexEntry] = {}
+
+
+# ---------------------------------------------------------------------------
+# Sync state models (_sync.yaml)
+# ---------------------------------------------------------------------------
+
+
+class SyncSourceBase(BaseModel):
+    """Common fields for all M365 sync sources."""
+
+    id: str
+    label: str
+    last_processed_at: Optional[str] = None
+    last_message_id: Optional[str] = None
+    unprocessed_count: int = 0
+    enabled: bool = True
+
+
+class TeamsSyncSource(SyncSourceBase):
+    """Teams channel sync source."""
+
+    channel_id: str
+
+
+class OutlookSyncSource(SyncSourceBase):
+    """Outlook folder/thread sync source."""
+
+    folder_id: str
+
+
+class SharePointSyncSource(SyncSourceBase):
+    """SharePoint document library sync source."""
+
+    site_url: str
+    library: str
+    last_modified_etag: Optional[str] = None
+
+
+class SyncPipeline(BaseModel):
+    """Pipeline scheduling configuration in _sync.yaml."""
+
+    correspondence_frequency: str = "daily"  # daily | weekly | manual
+    knowledge_frequency: str = "weekly"  # daily | weekly | manual
+    last_knowledge_synthesis: Optional[str] = None  # YYYY-MM-DD
+    next_knowledge_synthesis: Optional[str] = None  # YYYY-MM-DD
+
+
+class SyncSources(BaseModel):
+    """Source lists grouped by type in _sync.yaml."""
+
+    teams: list[Any] = []
+    outlook: list[Any] = []
+    sharepoint: list[Any] = []
+
+
+class SyncState(BaseModel):
+    """Represents projects/{slug}/_sync.yaml."""
+
+    last_sync: Optional[str] = None
+    sources: SyncSources = SyncSources()
+    pipeline: SyncPipeline = SyncPipeline()

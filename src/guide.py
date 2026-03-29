@@ -62,16 +62,27 @@ projects/{slug}/
 _SECTION_REF_SYNTAX = """\
 ## Reference syntax
 
-Use these tokens anywhere in Markdown file bodies.
+Use these tokens anywhere in Markdown file bodies or frontmatter fields.
 Parsed and indexed by the server on every write.
 
-  @person-slug       → resolves to _global/people/{slug}.md
-  @company-slug      → resolves to _global/companies/{slug}.md
-  #tag               → canonical list in _global/tags.md
-  [[project-slug]]   → resolves to projects/{slug}/
+  @person-slug                     → resolves to _global/people/{slug}.md
+  @company-slug                    → resolves to _global/companies/{slug}.md
+  #tag                             → canonical list in _global/tags.md
+  [[project-slug]]                 → resolves to projects/{slug}/
+  [mem:projects/proj/notes/x.md]  → internal cross-reference to another workspace file
+  [sp:source-id/path]             → SharePoint document (registered in _sync.yaml)
+  [tm:source-id/message-id]       → Teams message (registered in _sync.yaml)
+  [ol:source-id/message-id]       → Outlook email (registered in _sync.yaml)
 
-Unresolved @refs produce warnings, not errors. File is still written.
-Create the entity first with create_person or create_company to silence them."""
+Unresolved @refs and unresolved [mem:] refs produce warnings, not errors.
+File is still written — warnings are returned in the tool response.
+Use get_related_files to trace bidirectional links between workspace files.
+
+knowledge/ entries may list multiple sources in frontmatter:
+  source: "[sp:sp-contracts/msa-v2.pdf]"        # single source
+  source:                                         # multiple sources
+    - "[sp:sp-contracts/msa-v2.pdf]"
+    - "[mem:projects/acme/correspondence/q1-thread.md]" """
 
 _SECTION_KEY_SCHEMAS = """\
 ## Key schemas
@@ -82,7 +93,8 @@ type (client|internal|research|personal), company (@slug),
 owner (@slug), team ([@slug]), tags ([str]), created, updated
 
 ### knowledge/ frontmatter (required on every knowledge entry)
-source, processed (YYYY-MM-DD), method (manual|summary|extract),
+source: str | [str] | null  — M365 ref, [mem:] path, plain text, or list of these
+processed (YYYY-MM-DD), method (manual|summary|extract),
 model, prompt_ref
 
 ### _index.yaml entry (auto-managed — edit via update_file_description)
@@ -109,6 +121,7 @@ _index.yaml not writable or readable    write_file, append, read_file   Error
 projects/*/people.md is auto-managed    write_file, delete_file          Error
 Knowledge entries require frontmatter   write_file on knowledge/*.md    Warning
 Unresolved @ref tokens                  write_file, append_to_file      Warning
+Unresolved [mem:path] tokens            write_file, append_to_file      Warning
 Project slugs must be unique            create_project                  Error
 Dates must be YYYY-MM-DD                Pydantic model validation       Error"""
 
@@ -282,4 +295,182 @@ def generate_guide(mcp: "fastmcp.FastMCP", root: Path) -> str:
             f"# Project Memory MCP — Server Guide\n\n"
             f"_Error generating guide: {exc}_\n\n"
             f"Use list_projects to see available projects."
+        )
+
+
+# ---------------------------------------------------------------------------
+# M365 guide — static section constants
+# ---------------------------------------------------------------------------
+
+_M365_SECTION_AVAILABILITY = """\
+## M365 availability model
+
+The memory MCP server never calls M365 directly.
+M365 data enters the memory filesystem via:
+  1. The sync pipeline script (automated, reads M365 MCP, writes via memory MCP)
+  2. Manual fetch (call M365 MCP yourself, save result via write_file or
+     create_knowledge_entry)
+
+All memory MCP tools work without M365 connectivity.
+resolve_m365_ref returns local metadata only — it does not fetch live data."""
+
+_M365_SECTION_REF_SYNTAX = """\
+## M365 reference syntax
+
+Use these tokens in Markdown file bodies or frontmatter to link content to M365 sources
+or to other internal workspace files.  All tokens are parsed and indexed on every write.
+
+  [tm:source-id]                   Teams channel reference
+  [tm:source-id/message-id]        Specific Teams message
+  [ol:source-id]                   Outlook folder/thread reference
+  [ol:source-id/message-id]        Specific email message
+  [sp:source-id]                   SharePoint library root
+  [sp:source-id/path/to/file.pdf]  Specific SharePoint file
+  [mem:projects/proj/notes/x.md]   Internal cross-reference to another workspace file
+
+source-id (for M365 tokens) is the id field from _sync.yaml sources, not a raw M365 ID.
+
+### Examples
+
+In a knowledge entry body:
+  This contract was reviewed in [sp:sp-contracts/msa-v2.pdf].
+  Related background in [mem:projects/acme/knowledge/legal-context.md].
+
+In correspondence:
+  Thread summary pulled from [ol:outlook-internal/AAMkAGI2...].
+
+In decisions.md:
+  Architecture decision confirmed on call [tm:teams-general/123456789]
+
+knowledge/ frontmatter — multiple sources:
+  source:
+    - "[sp:sp-contracts/msa-v2.pdf]"
+    - "[mem:projects/acme/correspondence/q1-thread.md]"
+
+Use get_related_files to trace bidirectional links for any workspace file."""
+
+_M365_SECTION_SYNC_TOOLS = """\
+## Sync state tools — quick reference
+
+  Tool                             Parameters                              Description
+  ──────────────────────────────── ─────────────────────────────────────── ────────────────────────────────────────────
+  get_sync_state                   project_slug                            Read _sync.yaml; null result if missing.
+  update_sync_state                project_slug source_type source_id      Merge watermark fields into a source entry.
+                                   fields
+  add_sync_source                  project_slug source_type id label ...   Register a new M365 source.
+  list_projects_due_for_sync       frequency?                              Projects with overdue sync sources.
+  list_projects_due_for_synthesis  —                                       Projects with overdue knowledge synthesis.
+  resolve_m365_ref                 project_slug ref                        Resolve ref to local metadata."""
+
+_M365_SECTION_SCHEMA = """\
+## _sync.yaml schema
+
+Field                              Type      Notes
+────────────────────────────────── ───────── ─────────────────────────────────────
+last_sync                          str|null  ISO 8601 UTC or null
+sources.teams[].id                 str       kebab-case, unique within teams
+sources.teams[].label              str       human-readable
+sources.teams[].channel_id         str       M365 Teams channel ID
+sources.teams[].last_processed_at  str|null  ISO 8601 UTC watermark
+sources.teams[].last_message_id    str|null  Teams epoch timestamp watermark
+sources.teams[].unprocessed_count  int       estimated unprocessed messages
+sources.teams[].enabled            bool      false = skipped in pipeline runs
+sources.outlook[].folder_id        str       Outlook folder ID
+sources.sharepoint[].site_url      str       SharePoint site URL
+sources.sharepoint[].library       str       Document library name
+sources.sharepoint[].last_modified_etag  str|null  ETag watermark
+pipeline.correspondence_frequency  str       daily | weekly | manual
+pipeline.knowledge_frequency       str       daily | weekly | manual
+pipeline.last_knowledge_synthesis  str|null  YYYY-MM-DD
+pipeline.next_knowledge_synthesis  str|null  YYYY-MM-DD (computed on update)"""
+
+_M365_SECTION_PIPELINE = """\
+## Pipeline integration note
+
+The sync pipeline script (Phase 4d, separate from this server) is responsible
+for calling M365 MCP tools, summarizing content via Anthropic API, and writing
+results back via memory MCP tools. The memory server is stateless with respect
+to M365 — it stores watermarks and references but never initiates M365 calls."""
+
+
+def _m365_section_header() -> str:
+    today = date.today().isoformat()
+    return f"# Project Memory — M365 Integration Guide\n_Generated: {today}_"
+
+
+def _m365_section_source_registry(root: Path) -> str:
+    """Build a live table of all registered M365 sources across all projects."""
+    import yaml as _yaml
+
+    lines = ["## Source registry", ""]
+    rows: list[tuple[str, str, str, str, str, str]] = []
+
+    projects_dir = root / "projects"
+    if projects_dir.is_dir():
+        for project_dir in sorted(projects_dir.iterdir()):
+            if not project_dir.is_dir():
+                continue
+            slug = project_dir.name
+            sync_path = project_dir / "_sync.yaml"
+            if not sync_path.exists():
+                continue
+            try:
+                raw = _yaml.safe_load(sync_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+
+            type_map = {"teams": "Teams", "outlook": "Outlook", "sharepoint": "SharePoint"}
+            sources_dict = raw.get("sources", {})
+            for src_type, src_list in sources_dict.items():
+                if not isinstance(src_list, list):
+                    continue
+                for source in src_list:
+                    rows.append((
+                        slug,
+                        source.get("id", ""),
+                        type_map.get(src_type, src_type),
+                        source.get("label", ""),
+                        source.get("last_processed_at") or "—",
+                        "✓" if source.get("enabled", True) else "✗",
+                    ))
+
+    if not rows:
+        lines.append(
+            "| Project | ID | Type | Label | Last processed | Enabled |"
+        )
+        lines.append("|---|---|---|---|---|---|")
+        lines.append("")
+        lines.append(
+            "_No M365 sources registered. Use add_sync_source to register._"
+        )
+    else:
+        lines.append("| Project | ID | Type | Label | Last processed | Enabled |")
+        lines.append("|---|---|---|---|---|---|")
+        for slug, sid, stype, label, last, enabled in rows:
+            lines.append(f"| {slug} | {sid} | {stype} | {label} | {last} | {enabled} |")
+
+    return "\n".join(lines)
+
+
+def generate_m365_guide(mcp: "fastmcp.FastMCP", root: Path) -> str:
+    """Generate the M365 integration guide as a UTF-8 markdown string.
+
+    Never raises — returns a fallback string on error.
+    """
+    try:
+        sections = [
+            _m365_section_header(),
+            _M365_SECTION_AVAILABILITY,
+            _M365_SECTION_REF_SYNTAX,
+            _m365_section_source_registry(root),
+            _M365_SECTION_SYNC_TOOLS,
+            _M365_SECTION_SCHEMA,
+            _M365_SECTION_PIPELINE,
+        ]
+        return "\n\n".join(sections)
+    except Exception as exc:  # pragma: no cover
+        return (
+            f"# Project Memory — M365 Integration Guide\n\n"
+            f"_Error generating guide: {exc}_\n\n"
+            f"Use get_sync_state to check M365 configuration for a specific project."
         )
