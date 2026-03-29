@@ -81,6 +81,17 @@ the contract term is 24 months.
 
 This maintains auditability, signals that data is processed (not raw), and reduces stale-data risk.
 
+## RAG tools — when to use
+
+| Tool | When to use |
+|---|---|
+| `semantic_search` | Normal retrieval by meaning (default path for discovery) |
+| `rebuild_rag_index` | Only after manual/out-of-band file edits (outside MCP writes) |
+
+**Important rule:** MCP write operations (`write_file`, `append_to_file`, `create_knowledge_entry`, etc.)
+already update the index automatically. Do **not** rebuild on every request. Rebuild only when files changed
+outside MCP tools (manual editor changes, bulk import, git operations that changed file contents).
+
 ## Common tool parameters
 
 ### project_slug

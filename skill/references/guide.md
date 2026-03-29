@@ -95,9 +95,11 @@ If unsure between folders:
 | `list_projects_due_for_synthesis` | — | Return projects where a knowledge synthesis run is overdue |
 | `list_stale_manifests` | — | Return all folder paths where `_index.yaml` has `stale: true` |
 | `read_file` | path | Read a file. Blocks direct reads of `_index.yaml` and `_sync.yaml` |
+| `rebuild_rag_index` | project_slug?(opt), force?(opt) | Rebuild semantic index (use only after manual/out-of-band file edits) |
 | `resolve_m365_ref` | project_slug, ref | Resolve an M365 reference token to its full metadata |
 | `resolve_ref` | slug | Resolve `@slug` to a global entity (person or company) and return its content |
 | `search_files` | keyword | Search `.md` files for keyword |
+| `semantic_search` | query | Semantic retrieval over indexed files (supports optional project scope) |
 | `update_file_description` | folder_path, filename, description | Targeted update of a manifest entry |
 | `update_manifest` | folder_path | Rebuild `_index.yaml` for a folder |
 | `update_project` | slug | Update a project's metadata |
@@ -127,6 +129,7 @@ Key reminders:
 - All M365 tokens (`[sp:]`, `[tm:]`, `[ol:]`) require source registration via `add_sync_source` first
 - `source-id` is the `id` field from `_sync.yaml`, not raw M365 IDs
 - Multiple sources in `knowledge/` frontmatter are supported (see quick reference)
+- RAG indexing is automatic on MCP write operations; call `rebuild_rag_index` only when files were changed outside MCP tools
 
 ## Key schemas
 

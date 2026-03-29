@@ -1,0 +1,85 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1774816655.058384   21480 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+Traceback (most recent call last):
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\utils\import_utils.py", line 2302, in __getattr__
+    module = self._get_module(self._class_to_module[name])
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\utils\import_utils.py", line 2332, in _get_module
+    raise e
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\utils\import_utils.py", line 2330, in _get_module
+    return importlib.import_module("." + module_name, self.__name__)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\importlib\__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 1026, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\modeling_utils.py", line 70, in <module>
+    from .loss.loss_utils import LOSS_MAPPING
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\loss\loss_utils.py", line 21, in <module>
+    from .loss_d_fine import DFineForObjectDetectionLoss
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\loss\loss_d_fine.py", line 21, in <module>
+    from .loss_for_object_detection import (
+        box_iou,
+    )
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\loss\loss_for_object_detection.py", line 32, in <module>
+    from transformers.image_transforms import center_to_corners_format
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\image_transforms.py", line 48, in <module>
+    import tensorflow as tf
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\__init__.py", line 55, in <module>
+    from tensorflow._api.v2 import compat
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\_api\v2\compat\__init__.py", line 8, in <module>
+    from tensorflow._api.v2.compat import v1
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\_api\v2\compat\v1\__init__.py", line 30, in <module>
+    from tensorflow._api.v2.compat.v1 import compat
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\_api\v2\compat\v1\compat\__init__.py", line 8, in <module>
+    from tensorflow._api.v2.compat.v1.compat import v1
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\_api\v2\compat\v1\compat\v1\__init__.py", line 47, in <module>
+    from tensorflow._api.v2.compat.v1 import lite
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\_api\v2\compat\v1\lite\__init__.py", line 9, in <module>
+    from tensorflow._api.v2.compat.v1.lite import experimental
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\_api\v2\compat\v1\lite\experimental\__init__.py", line 8, in <module>
+    from tensorflow._api.v2.compat.v1.lite.experimental import authoring
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\_api\v2\compat\v1\lite\experimental\authoring\__init__.py", line 8, in <module>
+    from tensorflow.lite.python.authoring.authoring import compatible # line: 263
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\lite\python\authoring\authoring.py", line 42, in <module>
+    from tensorflow.lite.python import convert
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\lite\python\convert.py", line 34, in <module>
+    from tensorflow.lite.python.metrics.wrapper import metrics_wrapper as _metrics_wrapper
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\lite\python\metrics\wrapper\metrics_wrapper.py", line 19, in <module>
+    from tensorflow.lite.python.metrics._pywrap_tensorflow_lite_metrics_wrapper import MetricsWrapper  # pylint: disable=unused-import
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\lite\python\metrics\_pywrap_tensorflow_lite_metrics_wrapper.py", line 35, in <module>
+    __try_import()
+    ~~~~~~~~~~~~^^
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\tensorflow\lite\python\metrics\_pywrap_tensorflow_lite_metrics_wrapper.py", line 30, in __try_import
+      raise RuntimeError(f"""
+    Could not import original test/binary location, import paths tried: {imports_paths}.
+    Previous exceptions: {exceptions}""", last_exception)
+RuntimeError: ('\nCould not import original test/binary location, import paths tried: [\'litert.python._pywrap_tensorflow_lite_metrics_wrapper\', \'tensorflow.lite.python._pywrap_tensorflow_lite_metrics_wrapper\', \'tensorflow._pywrap_tensorflow_lite_metrics_wrapper\', \'tensorflow.python._pywrap_tensorflow_lite_metrics_wrapper\']. \nPrevious exceptions: ["No module named \'litert\'", \'DLL load failed while importing _pywrap_tensorflow_lite_metrics_wrapper: No se puede encontrar el m¾dulo especificado.\', "No module named \'tensorflow._pywrap_tensorflow_lite_metrics_wrapper\'", "No module named \'tensorflow.python._pywrap_tensorflow_lite_metrics_wrapper\'"]', ModuleNotFoundError("No module named 'tensorflow.python._pywrap_tensorflow_lite_metrics_wrapper'"))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import sentence_transformers; print('import-ok')
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\sentence_transformers\__init__.py", line 15, in <module>
+    from sentence_transformers.cross_encoder import (
+    ...<4 lines>...
+    )
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\sentence_transformers\cross_encoder\__init__.py", line 3, in <module>
+    from .CrossEncoder import CrossEncoder
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\sentence_transformers\cross_encoder\CrossEncoder.py", line 16, in <module>
+    from transformers import (
+    ...<6 lines>...
+    )
+  File "C:\Users\romag\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\utils\import_utils.py", line 2305, in __getattr__
+    raise ModuleNotFoundError(
+        f"Could not import module '{name}'. Are this object's requirements defined correctly?"
+    ) from e
+ModuleNotFoundError: Could not import module 'PreTrainedModel'. Are this object's requirements defined correctly?

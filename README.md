@@ -32,6 +32,7 @@ When an LLM needs to understand a project, it either:
 
 - ✅ **Local-first knowledge** — Process M365 sources once, store summaries locally, avoid re-fetching
 - ✅ **Structured memory** — Predictable, navigable folder layout that LLMs understand
+- ✅ **Local RAG + semantic search** — Use `--rag-backend embeddings` for semantic retrieval with automatic indexing on MCP writes
 - ✅ **M365 sync** — Automatic or manual ingestion from Outlook, Teams, SharePoint
 - ✅ **Token efficiency** — Manifest-based `read_when` hints guide LLMs to load only what's needed
 - ✅ **Human readable and editable** — Plain Markdown and YAML files, no proprietary formats, edit in any text editor

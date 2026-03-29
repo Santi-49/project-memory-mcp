@@ -70,6 +70,11 @@ These are the most commonly violated rules — worth internalising before you st
    local summary as your primary source. Avoid re-fetching the same M365 content
    multiple times — it wastes tokens.
 
+6. **RAG indexing is automatic; rebuild only for manual edits.** Files written via
+   MCP tools are indexed automatically. Use `rebuild_rag_index` when files were
+   modified outside MCP tools (manual disk edits, git checkout/reset, bulk copy/import),
+   then use `semantic_search` for retrieval.
+
 ## Step 4 — Project Instructions & MCP Connectors
 
 Every project gets a `_instructions.md` file (scaffolded at creation) that contains custom LLM behavior rules,

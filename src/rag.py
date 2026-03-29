@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -588,6 +589,10 @@ class _EmbeddingsBackend:
             )
             load_started = perf_counter()
             try:
+                # Prefer PyTorch backend and avoid optional TensorFlow imports,
+                # which can fail in environments with partial TF/TFLite installs.
+                os.environ.setdefault("USE_TF", "0")
+                os.environ.setdefault("USE_TORCH", "1")
                 from sentence_transformers import SentenceTransformer
             except ImportError as exc:
                 raise ImportError(
