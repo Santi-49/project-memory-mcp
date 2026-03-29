@@ -17,6 +17,7 @@ import yaml
 
 from models import (
     FolderManifest,
+    InternalRef,
     KnowledgeFrontmatter,
     M365Ref,
     ManifestEntry,
@@ -49,6 +50,8 @@ _REF_RE = re.compile(r"@([a-z0-9-]+)")
 _TAG_RE = re.compile(r"#([a-z0-9-]+)")
 _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _M365_REF_RE = re.compile(r"\[(tm|ol|sp):([a-z0-9-]+)(?:/([^\]]*))?\]")
+# Internal cross-reference: [mem:projects/proj/knowledge/file.md]
+_MEM_REF_RE = re.compile(r"\[mem:([^\]]+)\]")
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +217,7 @@ def _replace_markdown_section(content: str, heading: str, body: str) -> str:
 
 
 def parse_refs(content: str) -> dict[str, Any]:
-    """Parse @refs, #tags, [[links]], and [m365:] tokens from markdown content."""
+    """Parse @refs, #tags, [[links]], [m365:] and [mem:] tokens from markdown content."""
     refs = list(set(_REF_RE.findall(content)))
     tags = list(set(_TAG_RE.findall(content)))
     links = list(set(_LINK_RE.findall(content)))
@@ -235,7 +238,24 @@ def parse_refs(content: str) -> dict[str, Any]:
                 m365_refs.append(M365Ref(type=ref_type, source_id=source_id, message_id=remainder))
         except Exception:
             continue
-    return {"refs": refs, "tags": tags, "links": links, "m365_refs": m365_refs}
+    internal_refs: list[InternalRef] = []
+    seen_mem: set[str] = set()
+    for m in _MEM_REF_RE.finditer(content):
+        try:
+            path = m.group(1).strip()
+            if not path or path in seen_mem:
+                continue
+            seen_mem.add(path)
+            internal_refs.append(InternalRef(path=path))
+        except Exception:
+            continue
+    return {
+        "refs": refs,
+        "tags": tags,
+        "links": links,
+        "m365_refs": m365_refs,
+        "internal_refs": internal_refs,
+    }
 
 
 def validate_knowledge_frontmatter(content: str) -> tuple[bool, list[str]]:
@@ -385,9 +405,10 @@ class MemoryFS:
         if not path.exists():
             return RefsIndex()
         data = json.loads(path.read_text(encoding="utf-8"))
-        # Lazy migration: add m365_refs: [] to entries that lack it
+        # Lazy migration: add missing fields to entries from older index versions
         for entry_data in data.get("entries", {}).values():
             entry_data.setdefault("m365_refs", [])
+            entry_data.setdefault("internal_refs", [])
         return RefsIndex(**data)
 
     def save_refs_index(self, index: RefsIndex) -> None:
@@ -395,17 +416,16 @@ class MemoryFS:
         path.write_text(json.dumps(index.model_dump(), indent=2), encoding="utf-8")
 
     def update_refs_for_file(self, rel_path: str, content: str) -> None:
-        """Parse content for refs/tags/links/m365_refs and update _refs-index.json."""
+        """Parse content for refs/tags/links/m365_refs/internal_refs and update _refs-index.json."""
         parsed = parse_refs(content)
         refs_index = self.load_refs_index()
-        existing = refs_index.entries.get(rel_path)
-        m365_refs = parsed.get("m365_refs", [])
         refs_index.entries[rel_path] = RefsIndexEntry(
             path=rel_path,
             refs=parsed["refs"],
             tags=parsed["tags"],
             links=parsed["links"],
-            m365_refs=m365_refs,
+            m365_refs=parsed.get("m365_refs", []),
+            internal_refs=parsed.get("internal_refs", []),
         )
         self.save_refs_index(refs_index)
 
@@ -894,6 +914,7 @@ class MemoryFS:
         # Warn on unresolved refs
         parsed = parse_refs(content)
         warnings.extend(self.warn_unresolved_refs(parsed["refs"]))
+        warnings.extend(self.warn_unresolved_internal_refs(parsed.get("internal_refs", [])))
 
         # Update manifest
         folder = abs_path.parent
@@ -934,6 +955,7 @@ class MemoryFS:
         self.update_refs_for_file(rel_path, full_content)
         parsed = parse_refs(content)
         warnings.extend(self.warn_unresolved_refs(parsed["refs"]))
+        warnings.extend(self.warn_unresolved_internal_refs(parsed.get("internal_refs", [])))
 
         # Force a manifest rebuild for this folder to ensure new file is indexed
         self.rebuild_manifest(abs_path.parent)
@@ -1056,6 +1078,17 @@ class MemoryFS:
                 )
         return warnings
 
+    def warn_unresolved_internal_refs(self, internal_refs: list[InternalRef]) -> list[str]:
+        """Return warning strings for any [mem:path] refs where the target file doesn't exist."""
+        warnings: list[str] = []
+        for ref in internal_refs:
+            target = self.root / ref.path
+            if not target.exists():
+                warnings.append(
+                    f"Unresolved internal ref: [mem:{ref.path}] (file not found)"
+                )
+        return warnings
+
     def resolve_ref(self, slug: str) -> tuple[Path, str]:
         """Resolve @slug to (path, content).  Checks people then companies."""
         for sub in ("people", "companies"):
@@ -1067,7 +1100,7 @@ class MemoryFS:
         )
 
     def get_refs_for(self, ref: str) -> list[str]:
-        """Return list of file paths that mention @ref, #tag, [[link]], or m365 source_id."""
+        """Return list of file paths that mention @ref, #tag, [[link]], m365 source_id, or [mem:ref]."""
         refs_index = self.load_refs_index()
         results: list[str] = []
         for rel_path, entry in refs_index.entries.items():
@@ -1077,7 +1110,47 @@ class MemoryFS:
             # Also check m365_refs source_id
             if any(m.source_id == ref for m in entry.m365_refs):
                 results.append(rel_path)
+                continue
+            # Also check internal_refs path (exact or filename match)
+            if any(r.path == ref or Path(r.path).name == ref for r in entry.internal_refs):
+                results.append(rel_path)
         return results
+
+    def get_related_files(self, path: str) -> dict[str, Any]:
+        """Return bidirectional internal cross-reference map for a file.
+
+        Returns:
+          - path: normalised relative path
+          - referenced_by: files that contain [mem:this-path]
+          - references: files that this file references via [mem:...]
+          - m365_refs: M365 reference tokens in this file
+        """
+        abs_path = self._safe_path(path)
+        rel = self._rel(abs_path)
+        refs_index = self.load_refs_index()
+
+        # Files that reference this file via [mem:rel]
+        referenced_by: list[str] = []
+        for entry_path, entry in refs_index.entries.items():
+            if entry_path == rel:
+                continue
+            if any(r.path == rel for r in entry.internal_refs):
+                referenced_by.append(entry_path)
+
+        # Files this file references via [mem:...]
+        own_entry = refs_index.entries.get(rel)
+        references: list[str] = []
+        m365_refs: list[dict[str, Any]] = []
+        if own_entry:
+            references = [r.path for r in own_entry.internal_refs]
+            m365_refs = [r.model_dump() for r in own_entry.m365_refs]
+
+        return {
+            "path": rel,
+            "referenced_by": referenced_by,
+            "references": references,
+            "m365_refs": m365_refs,
+        }
 
     # ------------------------------------------------------------------
     # Global entity operations
@@ -1421,13 +1494,13 @@ class MemoryFS:
                 continue
             rel_path = self._rel(p)
             parsed = parse_refs(content)
-            m365_refs = parsed.get("m365_refs", [])
             new_index.entries[rel_path] = RefsIndexEntry(
                 path=rel_path,
                 refs=parsed["refs"],
                 tags=parsed["tags"],
                 links=parsed["links"],
-                m365_refs=m365_refs,
+                m365_refs=parsed.get("m365_refs", []),
+                internal_refs=parsed.get("internal_refs", []),
             )
         self.save_refs_index(new_index)
         return len(new_index.entries)

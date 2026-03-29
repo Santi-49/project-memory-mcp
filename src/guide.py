@@ -62,16 +62,27 @@ projects/{slug}/
 _SECTION_REF_SYNTAX = """\
 ## Reference syntax
 
-Use these tokens anywhere in Markdown file bodies.
+Use these tokens anywhere in Markdown file bodies or frontmatter fields.
 Parsed and indexed by the server on every write.
 
-  @person-slug       → resolves to _global/people/{slug}.md
-  @company-slug      → resolves to _global/companies/{slug}.md
-  #tag               → canonical list in _global/tags.md
-  [[project-slug]]   → resolves to projects/{slug}/
+  @person-slug                     → resolves to _global/people/{slug}.md
+  @company-slug                    → resolves to _global/companies/{slug}.md
+  #tag                             → canonical list in _global/tags.md
+  [[project-slug]]                 → resolves to projects/{slug}/
+  [mem:projects/proj/notes/x.md]  → internal cross-reference to another workspace file
+  [sp:source-id/path]             → SharePoint document (registered in _sync.yaml)
+  [tm:source-id/message-id]       → Teams message (registered in _sync.yaml)
+  [ol:source-id/message-id]       → Outlook email (registered in _sync.yaml)
 
-Unresolved @refs produce warnings, not errors. File is still written.
-Create the entity first with create_person or create_company to silence them."""
+Unresolved @refs and unresolved [mem:] refs produce warnings, not errors.
+File is still written — warnings are returned in the tool response.
+Use get_related_files to trace bidirectional links between workspace files.
+
+knowledge/ entries may list multiple sources in frontmatter:
+  source: "[sp:sp-contracts/msa-v2.pdf]"        # single source
+  source:                                         # multiple sources
+    - "[sp:sp-contracts/msa-v2.pdf]"
+    - "[mem:projects/acme/correspondence/q1-thread.md]" """
 
 _SECTION_KEY_SCHEMAS = """\
 ## Key schemas
@@ -82,7 +93,8 @@ type (client|internal|research|personal), company (@slug),
 owner (@slug), team ([@slug]), tags ([str]), created, updated
 
 ### knowledge/ frontmatter (required on every knowledge entry)
-source, processed (YYYY-MM-DD), method (manual|summary|extract),
+source: str | [str] | null  — M365 ref, [mem:] path, plain text, or list of these
+processed (YYYY-MM-DD), method (manual|summary|extract),
 model, prompt_ref
 
 ### _index.yaml entry (auto-managed — edit via update_file_description)
@@ -109,6 +121,7 @@ _index.yaml not writable or readable    write_file, append, read_file   Error
 projects/*/people.md is auto-managed    write_file, delete_file          Error
 Knowledge entries require frontmatter   write_file on knowledge/*.md    Warning
 Unresolved @ref tokens                  write_file, append_to_file      Warning
+Unresolved [mem:path] tokens            write_file, append_to_file      Warning
 Project slugs must be unique            create_project                  Error
 Dates must be YYYY-MM-DD                Pydantic model validation       Error"""
 
@@ -304,8 +317,8 @@ resolve_m365_ref returns local metadata only — it does not fetch live data."""
 _M365_SECTION_REF_SYNTAX = """\
 ## M365 reference syntax
 
-Use these tokens in Markdown file bodies to link content to M365 sources.
-Parsed and indexed in _refs-index.json on every write.
+Use these tokens in Markdown file bodies or frontmatter to link content to M365 sources
+or to other internal workspace files.  All tokens are parsed and indexed on every write.
 
   [tm:source-id]                   Teams channel reference
   [tm:source-id/message-id]        Specific Teams message
@@ -313,19 +326,28 @@ Parsed and indexed in _refs-index.json on every write.
   [ol:source-id/message-id]        Specific email message
   [sp:source-id]                   SharePoint library root
   [sp:source-id/path/to/file.pdf]  Specific SharePoint file
+  [mem:projects/proj/notes/x.md]   Internal cross-reference to another workspace file
 
-source-id is the id field from _sync.yaml sources, not a raw M365 ID.
+source-id (for M365 tokens) is the id field from _sync.yaml sources, not a raw M365 ID.
 
 ### Examples
 
 In a knowledge entry body:
   This contract was reviewed in [sp:sp-contracts/msa-v2.pdf].
+  Related background in [mem:projects/acme/knowledge/legal-context.md].
 
 In correspondence:
   Thread summary pulled from [ol:outlook-internal/AAMkAGI2...].
 
 In decisions.md:
-  Architecture decision confirmed on call [tm:teams-general/123456789]."""
+  Architecture decision confirmed on call [tm:teams-general/123456789]
+
+knowledge/ frontmatter — multiple sources:
+  source:
+    - "[sp:sp-contracts/msa-v2.pdf]"
+    - "[mem:projects/acme/correspondence/q1-thread.md]"
+
+Use get_related_files to trace bidirectional links for any workspace file."""
 
 _M365_SECTION_SYNC_TOOLS = """\
 ## Sync state tools — quick reference

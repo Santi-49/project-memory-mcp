@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -54,7 +54,7 @@ class ProjectMeta(BaseModel):
 class KnowledgeFrontmatter(BaseModel):
     """Frontmatter for knowledge/ entries."""
 
-    source: Optional[str] = None
+    source: Optional[Union[str, List[str]]] = None
     processed: Optional[str] = None
     method: Optional[str] = None
     model: Optional[str] = None
@@ -141,6 +141,12 @@ class M365Ref(BaseModel):
     message_id: Optional[str] = None  # for tm/ol refs (everything after first /)
 
 
+class InternalRef(BaseModel):
+    """A parsed internal cross-reference token ([mem:path/to/file.md])."""
+
+    path: str  # root-relative path to the referenced file
+
+
 class RefsIndexEntry(BaseModel):
     """Per-file refs entry in _refs-index.json."""
 
@@ -149,6 +155,7 @@ class RefsIndexEntry(BaseModel):
     tags: list[str] = []
     links: list[str] = []
     m365_refs: list[M365Ref] = []
+    internal_refs: list[InternalRef] = []
 
 
 class RefsIndex(BaseModel):

@@ -854,6 +854,27 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         except Exception as e:
             return {"error": str(e), "warnings": []}
 
+    @mcp.tool
+    def get_related_files(path: str) -> dict[str, Any]:
+        """Return bidirectional cross-reference map for a file.
+
+        Shows:
+          - referenced_by: files that link to this file via [mem:path]
+          - references: files that this file links to via [mem:...]
+          - m365_refs: M365 source tokens ([sp:], [tm:], [ol:]) in this file
+
+        Use this to trace how a piece of content relates to its sources
+        (M365 documents, Teams threads, email threads) and to other internal
+        workspace files (knowledge entries, correspondence, notes, updates).
+        """
+        try:
+            result = fs.get_related_files(path)
+            return {"result": result, "warnings": []}
+        except FileNotFoundError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
     # -----------------------------------------------------------------------
     # Sync state tools (M365 integration)
     # -----------------------------------------------------------------------
