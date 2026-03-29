@@ -18,6 +18,7 @@ import yaml
 from models import (
     FolderManifest,
     KnowledgeFrontmatter,
+    M365Ref,
     ManifestEntry,
     ProjectIndexEntry,
     ProjectMeta,
@@ -38,6 +39,7 @@ from templates import (
     PROJECT_META_TEMPLATE,
     PROJECT_STATUS_TEMPLATE,
     ROOT_MANIFEST_TEMPLATE,
+    SYNC_YAML_TEMPLATE,
     UPDATES_MANIFEST_TEMPLATE,
 )
 
@@ -46,6 +48,7 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _REF_RE = re.compile(r"@([a-z0-9-]+)")
 _TAG_RE = re.compile(r"#([a-z0-9-]+)")
 _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+_M365_REF_RE = re.compile(r"\[(tm|ol|sp):([a-z0-9-]+)(?:/([^\]]*))?\]")
 
 
 # ---------------------------------------------------------------------------
@@ -106,8 +109,13 @@ def is_append_only(path: Path) -> bool:
 
 
 def is_manifest(path: Path) -> bool:
-    """Return True if path is a _index.yaml (protected from direct write)."""
-    return path.name.lower() == "_index.yaml"
+    """Return True if path is a _index.yaml or _sync.yaml (protected from direct write)."""
+    return path.name.lower() in ("_index.yaml", "_sync.yaml")
+
+
+def is_sync_yaml(path: Path) -> bool:
+    """Return True if path is a _sync.yaml file."""
+    return path.name.lower() == "_sync.yaml"
 
 
 def is_project_people_file(path: Path) -> bool:
@@ -200,12 +208,29 @@ def _replace_markdown_section(content: str, heading: str, body: str) -> str:
     return content.rstrip() + "\n\n" + replacement
 
 
-def parse_refs(content: str) -> dict[str, list[str]]:
-    """Parse @refs, #tags, [[links]] from markdown content."""
+def parse_refs(content: str) -> dict[str, Any]:
+    """Parse @refs, #tags, [[links]], and [m365:] tokens from markdown content."""
     refs = list(set(_REF_RE.findall(content)))
     tags = list(set(_TAG_RE.findall(content)))
     links = list(set(_LINK_RE.findall(content)))
-    return {"refs": refs, "tags": tags, "links": links}
+    m365_refs: list[M365Ref] = []
+    seen_m365: set[str] = set()
+    for m in _M365_REF_RE.finditer(content):
+        try:
+            ref_type = m.group(1)
+            source_id = m.group(2)
+            remainder = m.group(3) or None
+            key = f"{ref_type}:{source_id}:{remainder}"
+            if key in seen_m365:
+                continue
+            seen_m365.add(key)
+            if ref_type == "sp":
+                m365_refs.append(M365Ref(type=ref_type, source_id=source_id, path=remainder))
+            else:
+                m365_refs.append(M365Ref(type=ref_type, source_id=source_id, message_id=remainder))
+        except Exception:
+            continue
+    return {"refs": refs, "tags": tags, "links": links, "m365_refs": m365_refs}
 
 
 def validate_knowledge_frontmatter(content: str) -> tuple[bool, list[str]]:
@@ -355,6 +380,9 @@ class MemoryFS:
         if not path.exists():
             return RefsIndex()
         data = json.loads(path.read_text(encoding="utf-8"))
+        # Lazy migration: add m365_refs: [] to entries that lack it
+        for entry_data in data.get("entries", {}).values():
+            entry_data.setdefault("m365_refs", [])
         return RefsIndex(**data)
 
     def save_refs_index(self, index: RefsIndex) -> None:
@@ -362,10 +390,18 @@ class MemoryFS:
         path.write_text(json.dumps(index.model_dump(), indent=2), encoding="utf-8")
 
     def update_refs_for_file(self, rel_path: str, content: str) -> None:
-        """Parse content for refs/tags/links and update _refs-index.json."""
+        """Parse content for refs/tags/links/m365_refs and update _refs-index.json."""
         parsed = parse_refs(content)
         refs_index = self.load_refs_index()
-        refs_index.entries[rel_path] = RefsIndexEntry(path=rel_path, **parsed)
+        existing = refs_index.entries.get(rel_path)
+        m365_refs = parsed.get("m365_refs", [])
+        refs_index.entries[rel_path] = RefsIndexEntry(
+            path=rel_path,
+            refs=parsed["refs"],
+            tags=parsed["tags"],
+            links=parsed["links"],
+            m365_refs=m365_refs,
+        )
         self.save_refs_index(refs_index)
 
     # ------------------------------------------------------------------
@@ -805,9 +841,15 @@ class MemoryFS:
         warnings: list[str] = []
 
         # Block _index.yaml
-        if is_manifest(abs_path):
+        if abs_path.name.lower() == "_index.yaml":
             raise ValueError(
                 "_index.yaml is auto-managed. Use update_file_description or update_manifest tools instead."
+            )
+
+        # Block _sync.yaml
+        if is_sync_yaml(abs_path):
+            raise ValueError(
+                "_sync.yaml is auto-managed. Use get_sync_state, update_sync_state, or add_sync_source tools instead."
             )
 
         # Block project people.md (auto-managed from global person relationships)
@@ -922,6 +964,12 @@ class MemoryFS:
                 "projects/{slug}/people.md is auto-managed and cannot be deleted."
             )
 
+        if is_sync_yaml(abs_path):
+            raise ValueError(
+                "_sync.yaml cannot be deleted via the MCP interface. "
+                "To remove M365 config, use add_sync_source with enabled=false."
+            )
+
         trash_dir = self.root / "_trash"
         trash_dir.mkdir(exist_ok=True)
         dest_name = f"{_now_ts()}_{abs_path.name}"
@@ -1014,11 +1062,15 @@ class MemoryFS:
         )
 
     def get_refs_for(self, ref: str) -> list[str]:
-        """Return list of file paths that mention @ref, #tag, or [[link]]."""
+        """Return list of file paths that mention @ref, #tag, [[link]], or m365 source_id."""
         refs_index = self.load_refs_index()
         results: list[str] = []
         for rel_path, entry in refs_index.entries.items():
             if ref in entry.refs or ref in entry.tags or ref in entry.links:
+                results.append(rel_path)
+                continue
+            # Also check m365_refs source_id
+            if any(m.source_id == ref for m in entry.m365_refs):
                 results.append(rel_path)
         return results
 
@@ -1364,7 +1416,14 @@ class MemoryFS:
                 continue
             rel_path = self._rel(p)
             parsed = parse_refs(content)
-            new_index.entries[rel_path] = RefsIndexEntry(path=rel_path, **parsed)
+            m365_refs = parsed.get("m365_refs", [])
+            new_index.entries[rel_path] = RefsIndexEntry(
+                path=rel_path,
+                refs=parsed["refs"],
+                tags=parsed["tags"],
+                links=parsed["links"],
+                m365_refs=m365_refs,
+            )
         self.save_refs_index(new_index)
         return len(new_index.entries)
 
@@ -1386,3 +1445,373 @@ class MemoryFS:
             except Exception:
                 pass
         return stale
+
+    # ------------------------------------------------------------------
+    # Sync state (_sync.yaml) management
+    # ------------------------------------------------------------------
+
+    def _sync_yaml_path(self, project_slug: str) -> Path:
+        return self.root / "projects" / project_slug / "_sync.yaml"
+
+    def _load_sync_state_raw(self, project_slug: str) -> Optional[dict[str, Any]]:
+        """Load _sync.yaml as a raw dict, or None if it does not exist."""
+        p = self._sync_yaml_path(project_slug)
+        if not p.exists():
+            return None
+        try:
+            return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+
+    def _save_sync_state_raw(self, project_slug: str, data: dict[str, Any]) -> None:
+        """Write _sync.yaml atomically."""
+        p = self._sync_yaml_path(project_slug)
+        header = (
+            "# Auto-managed by sync pipeline. Do not edit manually.\n"
+            "# Missing file = no M365 sources configured for this project. Not an error.\n\n"
+        )
+        p.write_text(
+            header + yaml.dump(data, default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+    def _minimal_sync_state(self) -> dict[str, Any]:
+        """Return a minimal valid _sync.yaml dict structure."""
+        return {
+            "last_sync": None,
+            "sources": {"teams": [], "outlook": [], "sharepoint": []},
+            "pipeline": {
+                "correspondence_frequency": "daily",
+                "knowledge_frequency": "weekly",
+                "last_knowledge_synthesis": None,
+                "next_knowledge_synthesis": None,
+            },
+        }
+
+    def get_sync_state(self, project_slug: str) -> dict[str, Any]:
+        """Read _sync.yaml for a project.
+
+        Returns full content as dict, or {"result": null, "warnings": [...]} if missing.
+        """
+        raw = self._load_sync_state_raw(project_slug)
+        if raw is None:
+            return {"result": None, "warnings": ["No sync state found"]}
+        return {"result": raw, "warnings": []}
+
+    def update_sync_state(
+        self,
+        project_slug: str,
+        source_type: str,
+        source_id: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update watermark fields for a specific source or pipeline config.
+
+        source_type: "teams" | "outlook" | "sharepoint" | "pipeline"
+        Returns the updated entry.
+        """
+        raw = self._load_sync_state_raw(project_slug)
+        if raw is None:
+            raw = self._minimal_sync_state()
+
+        _ALLOWED_SOURCE_FIELDS = {
+            "last_processed_at", "last_message_id", "last_modified_etag",
+            "unprocessed_count", "enabled",
+        }
+        _ALLOWED_PIPELINE_FIELDS = {
+            "last_knowledge_synthesis", "next_knowledge_synthesis",
+            "correspondence_frequency", "knowledge_frequency",
+        }
+
+        if source_type == "pipeline":
+            pipeline = raw.setdefault("pipeline", {})
+            for k, v in fields.items():
+                if k == "last_sync":
+                    raw["last_sync"] = v
+                elif k in _ALLOWED_PIPELINE_FIELDS:
+                    pipeline[k] = v
+                else:
+                    raise ValueError(f"Field {k!r} is not allowed on pipeline config")
+            self._save_sync_state_raw(project_slug, raw)
+            return {"result": pipeline, "warnings": []}
+
+        valid_types = ("teams", "outlook", "sharepoint")
+        if source_type not in valid_types:
+            raise ValueError(f"source_type must be one of {valid_types}")
+
+        sources = raw.setdefault("sources", {})
+        source_list: list[dict[str, Any]] = sources.setdefault(source_type, [])
+
+        target = next((s for s in source_list if s.get("id") == source_id), None)
+        if target is None:
+            raise ValueError(
+                f"Source {source_id!r} not found in {source_type} sources for project {project_slug!r}. "
+                "Use add_sync_source to register new sources."
+            )
+
+        for k, v in fields.items():
+            if k not in _ALLOWED_SOURCE_FIELDS:
+                raise ValueError(f"Field {k!r} is not allowed on source entries")
+            target[k] = v
+
+        self._save_sync_state_raw(project_slug, raw)
+        return {"result": target, "warnings": []}
+
+    def add_sync_source(
+        self,
+        project_slug: str,
+        source_type: str,
+        id: str,
+        label: str,
+        enabled: bool = True,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Register a new M365 source for a project.
+
+        Validates kebab-case id uniqueness; creates _sync.yaml if missing.
+        """
+        valid_types = ("teams", "outlook", "sharepoint")
+        if source_type not in valid_types:
+            raise ValueError(f"source_type must be one of {valid_types}")
+
+        if not _KEBAB_RE.match(id):
+            raise ValueError(
+                f"id must be kebab-case (lowercase letters, digits, hyphens). Got: {id!r}"
+            )
+
+        raw = self._load_sync_state_raw(project_slug)
+        if raw is None:
+            raw = self._minimal_sync_state()
+
+        sources = raw.setdefault("sources", {})
+        source_list: list[dict[str, Any]] = sources.setdefault(source_type, [])
+
+        if any(s.get("id") == id for s in source_list):
+            raise ValueError(
+                f"Source id {id!r} already exists in {source_type} sources for project {project_slug!r}"
+            )
+
+        new_source: dict[str, Any] = {
+            "id": id,
+            "label": label,
+            "last_processed_at": None,
+            "last_message_id": None,
+            "unprocessed_count": 0,
+            "enabled": enabled,
+        }
+
+        if source_type == "teams":
+            channel_id = kwargs.get("channel_id")
+            if not channel_id:
+                raise ValueError("channel_id is required for teams sources")
+            new_source["channel_id"] = channel_id
+
+        elif source_type == "outlook":
+            folder_id = kwargs.get("folder_id")
+            if not folder_id:
+                raise ValueError("folder_id is required for outlook sources")
+            new_source["folder_id"] = folder_id
+
+        elif source_type == "sharepoint":
+            site_url = kwargs.get("site_url")
+            library = kwargs.get("library")
+            if not site_url:
+                raise ValueError("site_url is required for sharepoint sources")
+            if not library:
+                raise ValueError("library is required for sharepoint sources")
+            new_source["site_url"] = site_url
+            new_source["library"] = library
+            new_source["last_modified_etag"] = None
+
+        source_list.append(new_source)
+        self._save_sync_state_raw(project_slug, raw)
+        return {"result": new_source, "warnings": []}
+
+    def list_projects_due_for_sync(
+        self, frequency: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Return projects where a sync run is overdue.
+
+        frequency: "daily" | "weekly" | None (all overdue)
+        """
+        now = datetime.now(timezone.utc)
+        today_cutoff = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        seven_days_ago = now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).replace(
+            day=now.day - 7
+            if now.day > 7
+            else now.day
+        )
+        # Use timedelta for robustness
+        from datetime import timedelta
+        seven_days_ago = now - timedelta(days=7)
+
+        results: list[dict[str, Any]] = []
+        pi = self.load_projects_index()
+
+        for project in pi.projects:
+            slug = project.slug
+            raw = self._load_sync_state_raw(slug)
+            if raw is None:
+                continue
+
+            pipeline = raw.get("pipeline", {})
+            correspondence_freq = pipeline.get("correspondence_frequency", "daily")
+
+            sources_dict = raw.get("sources", {})
+            overdue_sources: list[dict[str, Any]] = []
+
+            for src_type, src_list in sources_dict.items():
+                if not isinstance(src_list, list):
+                    continue
+                for source in src_list:
+                    if not source.get("enabled", True):
+                        continue
+
+                    # Determine the effective frequency for this source
+                    effective_freq = correspondence_freq
+                    if frequency is not None and effective_freq != frequency:
+                        continue
+                    if effective_freq == "manual":
+                        continue
+
+                    last_processed = source.get("last_processed_at")
+                    is_overdue = False
+
+                    if last_processed is None:
+                        is_overdue = True
+                    else:
+                        try:
+                            last_dt = datetime.fromisoformat(
+                                last_processed.replace("Z", "+00:00")
+                            )
+                            if last_dt.tzinfo is None:
+                                last_dt = last_dt.replace(tzinfo=timezone.utc)
+                            if effective_freq == "daily":
+                                is_overdue = last_dt < today_cutoff
+                            elif effective_freq == "weekly":
+                                is_overdue = last_dt < seven_days_ago
+                        except Exception:
+                            is_overdue = True
+
+                    if is_overdue:
+                        overdue_sources.append({
+                            "id": source.get("id"),
+                            "type": src_type,
+                            "label": source.get("label"),
+                            "last_processed_at": last_processed,
+                        })
+
+            if overdue_sources:
+                results.append({
+                    "slug": slug,
+                    "name": project.name,
+                    "overdue_sources": overdue_sources,
+                })
+
+        return results
+
+    def list_projects_due_for_synthesis(self) -> list[dict[str, Any]]:
+        """Return projects where a knowledge synthesis run is overdue."""
+        today = date.today().isoformat()
+        results: list[dict[str, Any]] = []
+        pi = self.load_projects_index()
+
+        for project in pi.projects:
+            slug = project.slug
+            raw = self._load_sync_state_raw(slug)
+            if raw is None:
+                continue
+
+            pipeline = raw.get("pipeline", {})
+            next_synthesis = pipeline.get("next_knowledge_synthesis")
+            if not next_synthesis:
+                continue
+
+            if next_synthesis <= today:
+                results.append({
+                    "slug": slug,
+                    "name": project.name,
+                    "last_knowledge_synthesis": pipeline.get("last_knowledge_synthesis"),
+                    "next_knowledge_synthesis": next_synthesis,
+                })
+
+        return results
+
+    def resolve_m365_ref(
+        self, project_slug: str, ref: str
+    ) -> dict[str, Any]:
+        """Resolve an M365 reference token to its full metadata.
+
+        Never calls M365 directly — returns local metadata only.
+        """
+        # Strip leading/trailing brackets if present
+        clean = ref.strip().lstrip("[").rstrip("]")
+
+        m = re.match(r"^(tm|ol|sp):([a-z0-9-]+)(?:/(.+))?$", clean)
+        if not m:
+            return {"error": f"Cannot parse M365 ref: {ref!r}"}
+
+        ref_type = m.group(1)
+        source_id = m.group(2)
+        path_part = m.group(3) or None
+
+        raw = self._load_sync_state_raw(project_slug)
+        if raw is None:
+            return {"error": f"No M365 sources configured for project {project_slug!r}"}
+
+        type_map = {"tm": "teams", "ol": "outlook", "sp": "sharepoint"}
+        source_type = type_map.get(ref_type, ref_type)
+
+        sources_dict = raw.get("sources", {})
+        source_list = sources_dict.get(source_type, [])
+        source = next((s for s in source_list if s.get("id") == source_id), None)
+
+        if source is None:
+            return {
+                "error": f"Source {source_id!r} not registered for project {project_slug!r}"
+            }
+
+        # Check for local doc copy (sp refs only)
+        local_doc: Optional[str] = None
+        if ref_type == "sp" and path_part:
+            filename = Path(path_part).name
+            docs_dir = self.root / "projects" / project_slug / "docs"
+            if docs_dir.is_dir():
+                for candidate in docs_dir.rglob(filename):
+                    local_doc = self._rel(candidate)
+                    break
+
+        # Check for knowledge entry referencing this source
+        knowledge_entry: Optional[str] = None
+        refs_index = self.load_refs_index()
+        for entry_path, entry in refs_index.entries.items():
+            if not entry_path.startswith(f"projects/{project_slug}/knowledge/"):
+                continue
+            if any(m_ref.source_id == source_id for m_ref in entry.m365_refs):
+                knowledge_entry = entry_path
+                break
+
+        result: dict[str, Any] = {
+            "source_id": source_id,
+            "type": source_type,
+            "label": source.get("label"),
+            "last_processed_at": source.get("last_processed_at"),
+            "local_doc": local_doc,
+            "knowledge_entry": knowledge_entry,
+            "m365_available": False,
+        }
+
+        if ref_type == "sp":
+            result["site_url"] = source.get("site_url")
+            result["library"] = source.get("library")
+            result["path"] = path_part
+        elif ref_type == "tm":
+            result["channel_id"] = source.get("channel_id")
+            result["message_id"] = path_part
+        elif ref_type == "ol":
+            result["folder_id"] = source.get("folder_id")
+            result["message_id"] = path_part
+
+        return result

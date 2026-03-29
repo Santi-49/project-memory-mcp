@@ -120,7 +120,10 @@ class TestParseRefs:
 
     def test_empty(self):
         result = parse_refs("No refs here")
-        assert result == {"refs": [], "tags": [], "links": []}
+        assert result["refs"] == []
+        assert result["tags"] == []
+        assert result["links"] == []
+        assert result["m365_refs"] == []
 
 
 class TestValidateKnowledgeFrontmatter:
@@ -1357,6 +1360,887 @@ class TestGuideResource:
         result = asyncio.run(mcp_server.read_resource("memory://guide"))
         assert isinstance(result.contents[0].content, str)
         assert len(result.contents[0].content) > 100
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# M365 Integration Tests
+# ---------------------------------------------------------------------------
+
+
+class TestSyncState:
+    """TestSyncState — get/update/add round-trip, missing file handling,
+    duplicate id rejection, kebab-case enforcement.
+    """
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+    def test_get_sync_state_missing_returns_null(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        result = fs.get_sync_state("test-proj")
+        assert result["result"] is None
+        assert result["warnings"] == ["No sync state found"]
+
+    def test_add_sync_source_teams_creates_file(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        result = fs.add_sync_source(
+            "test-proj", "teams", id="teams-general", label="General channel",
+            channel_id="19:abc123",
+        )
+        assert "error" not in result
+        assert result["result"]["id"] == "teams-general"
+        sync_path = fs.root / "projects" / "test-proj" / "_sync.yaml"
+        assert sync_path.exists()
+
+    def test_add_sync_source_outlook(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        result = fs.add_sync_source(
+            "test-proj", "outlook", id="outlook-internal", label="Internal thread",
+            folder_id="AAMkAGI2",
+        )
+        assert "error" not in result
+        assert result["result"]["folder_id"] == "AAMkAGI2"
+
+    def test_add_sync_source_sharepoint(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        result = fs.add_sync_source(
+            "test-proj", "sharepoint", id="sp-contracts", label="Contracts library",
+            site_url="https://company.sharepoint.com/sites/acme",
+            library="Contracts",
+        )
+        assert "error" not in result
+        assert result["result"]["site_url"] == "https://company.sharepoint.com/sites/acme"
+        assert result["result"]["library"] == "Contracts"
+
+    def test_add_sync_source_default_fields(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        result = fs.add_sync_source(
+            "test-proj", "teams", id="teams-general", label="General",
+            channel_id="19:abc",
+        )
+        src = result["result"]
+        assert src["last_processed_at"] is None
+        assert src["last_message_id"] is None
+        assert src["unprocessed_count"] == 0
+        assert src["enabled"] is True
+
+    def test_add_sync_source_duplicate_id_raises(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general", label="General",
+            channel_id="19:abc",
+        )
+        with pytest.raises(ValueError, match="already exists"):
+            fs.add_sync_source(
+                "test-proj", "teams", id="teams-general", label="Duplicate",
+                channel_id="19:xyz",
+            )
+
+    def test_add_sync_source_kebab_case_enforced(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        with pytest.raises(ValueError, match="kebab-case"):
+            fs.add_sync_source(
+                "test-proj", "teams", id="INVALID_ID", label="Bad",
+                channel_id="19:abc",
+            )
+
+    def test_add_sync_source_same_id_different_types_allowed(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="general", label="Teams General",
+            channel_id="19:abc",
+        )
+        # Same id but different type is allowed
+        result = fs.add_sync_source(
+            "test-proj", "outlook", id="general", label="Outlook General",
+            folder_id="AAMkAGI2",
+        )
+        assert "error" not in result
+
+    def test_get_sync_state_round_trip(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general", label="General",
+            channel_id="19:abc",
+        )
+        state = fs.get_sync_state("test-proj")
+        assert state["result"] is not None
+        teams = state["result"]["sources"]["teams"]
+        assert any(s["id"] == "teams-general" for s in teams)
+
+    def test_update_sync_state_merges_fields(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general", label="General",
+            channel_id="19:abc",
+        )
+        result = fs.update_sync_state(
+            "test-proj", "teams", "teams-general",
+            {"last_processed_at": "2025-03-28T06:00:00Z", "unprocessed_count": 5},
+        )
+        assert "error" not in result
+        src = result["result"]
+        assert src["last_processed_at"] == "2025-03-28T06:00:00Z"
+        assert src["unprocessed_count"] == 5
+        # Verify persisted
+        state = fs.get_sync_state("test-proj")
+        teams = state["result"]["sources"]["teams"]
+        t = next(s for s in teams if s["id"] == "teams-general")
+        assert t["last_processed_at"] == "2025-03-28T06:00:00Z"
+
+    def test_update_sync_state_unknown_source_raises(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general", label="General",
+            channel_id="19:abc",
+        )
+        with pytest.raises(ValueError, match="not found"):
+            fs.update_sync_state(
+                "test-proj", "teams", "unknown-source",
+                {"last_processed_at": "2025-03-28T06:00:00Z"},
+            )
+
+    def test_update_sync_state_pipeline(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general", label="General",
+            channel_id="19:abc",
+        )
+        result = fs.update_sync_state(
+            "test-proj", "pipeline", "",
+            {"last_knowledge_synthesis": "2025-03-28", "next_knowledge_synthesis": "2025-04-04"},
+        )
+        assert "error" not in result
+        state = fs.get_sync_state("test-proj")
+        pipeline = state["result"]["pipeline"]
+        assert pipeline["last_knowledge_synthesis"] == "2025-03-28"
+        assert pipeline["next_knowledge_synthesis"] == "2025-04-04"
+
+    def test_update_sync_state_creates_sync_yaml_if_missing(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general", label="General",
+            channel_id="19:abc",
+        )
+        # File already created by add_sync_source; test update creates it if not there
+        sync_path = fs.root / "projects" / "test-proj" / "_sync.yaml"
+        sync_path.unlink()
+        # update_sync_state creates minimal structure first, but since source doesn't
+        # exist in the new empty file, it should raise
+        with pytest.raises(ValueError, match="not found"):
+            fs.update_sync_state(
+                "test-proj", "teams", "teams-general",
+                {"unprocessed_count": 1},
+            )
+
+    def test_add_sync_source_teams_missing_channel_id_raises(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        with pytest.raises(ValueError, match="channel_id"):
+            fs.add_sync_source("test-proj", "teams", id="t1", label="T1")
+
+    def test_add_sync_source_outlook_missing_folder_id_raises(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        with pytest.raises(ValueError, match="folder_id"):
+            fs.add_sync_source("test-proj", "outlook", id="o1", label="O1")
+
+    def test_add_sync_source_sharepoint_missing_fields_raises(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        with pytest.raises(ValueError, match="site_url"):
+            fs.add_sync_source("test-proj", "sharepoint", id="sp1", label="SP1")
+
+
+class TestM365RefParser:
+    """TestM365RefParser — all token types, with/without path, malformed refs."""
+
+    def test_sp_ref_no_path(self):
+        result = parse_refs("See [sp:sp-contracts]")
+        assert len(result["m365_refs"]) == 1
+        r = result["m365_refs"][0]
+        assert r.type == "sp"
+        assert r.source_id == "sp-contracts"
+        assert r.path is None
+
+    def test_sp_ref_with_path(self):
+        result = parse_refs("See [sp:sp-contracts/msa-v2.pdf]")
+        assert len(result["m365_refs"]) == 1
+        r = result["m365_refs"][0]
+        assert r.type == "sp"
+        assert r.source_id == "sp-contracts"
+        assert r.path == "msa-v2.pdf"
+
+    def test_sp_ref_with_nested_path(self):
+        result = parse_refs("From [sp:sp-contracts/folder/sub/file.pdf]")
+        r = result["m365_refs"][0]
+        assert r.path == "folder/sub/file.pdf"
+
+    def test_tm_ref_no_message(self):
+        result = parse_refs("Channel [tm:teams-general]")
+        r = result["m365_refs"][0]
+        assert r.type == "tm"
+        assert r.source_id == "teams-general"
+        assert r.message_id is None
+
+    def test_tm_ref_with_message_id(self):
+        result = parse_refs("Message [tm:teams-general/123456789]")
+        r = result["m365_refs"][0]
+        assert r.type == "tm"
+        assert r.message_id == "123456789"
+
+    def test_ol_ref_no_message(self):
+        result = parse_refs("Thread [ol:outlook-internal]")
+        r = result["m365_refs"][0]
+        assert r.type == "ol"
+        assert r.source_id == "outlook-internal"
+
+    def test_ol_ref_with_message_id(self):
+        result = parse_refs("Email [ol:outlook-internal/AAMkAGI2]")
+        r = result["m365_refs"][0]
+        assert r.type == "ol"
+        assert r.message_id == "AAMkAGI2"
+
+    def test_multiple_refs_in_content(self):
+        content = "See [sp:sp-contracts/file.pdf] and [tm:teams-general]"
+        result = parse_refs(content)
+        assert len(result["m365_refs"]) == 2
+        types = {r.type for r in result["m365_refs"]}
+        assert types == {"sp", "tm"}
+
+    def test_duplicate_refs_deduplicated(self):
+        content = "[sp:sp-contracts] and [sp:sp-contracts]"
+        result = parse_refs(content)
+        assert len(result["m365_refs"]) == 1
+
+    def test_malformed_ref_skipped(self):
+        # Should not raise, just produce no m365_refs
+        result = parse_refs("Bad ref [xx:something] and normal text")
+        assert result["m365_refs"] == []
+
+    def test_existing_refs_still_parsed(self):
+        content = "@john-doe #python [sp:sp-contracts]"
+        result = parse_refs(content)
+        assert "john-doe" in result["refs"]
+        assert "python" in result["tags"]
+        assert len(result["m365_refs"]) == 1
+
+    def test_double_bracket_links_not_affected(self):
+        # [[wiki-links]] should not be parsed as m365 refs
+        content = "[[project-slug]] and [sp:sp-contracts]"
+        result = parse_refs(content)
+        assert "project-slug" in result["links"]
+        assert len(result["m365_refs"]) == 1
+
+
+class TestRefsIndexM365:
+    """TestRefsIndexM365 — m365_refs indexed on write, lazy migration on read."""
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+    def test_m365_refs_indexed_on_write(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [sp:sp-contracts/file.pdf]",
+        )
+        index = fs.load_refs_index()
+        entry = index.entries.get("projects/test-proj/notes/note.md")
+        assert entry is not None
+        assert len(entry.m365_refs) == 1
+        assert entry.m365_refs[0].source_id == "sp-contracts"
+
+    def test_m365_refs_lazy_migration(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        # Write a refs-index entry without m365_refs field (simulating old data)
+        old_data = {
+            "entries": {
+                "projects/test-proj/notes/note.md": {
+                    "path": "projects/test-proj/notes/note.md",
+                    "refs": [],
+                    "tags": ["old-tag"],
+                    "links": [],
+                }
+            }
+        }
+        (fs.root / "_refs-index.json").write_text(
+            json.dumps(old_data), encoding="utf-8"
+        )
+        index = fs.load_refs_index()
+        entry = index.entries.get("projects/test-proj/notes/note.md")
+        assert entry is not None
+        assert entry.m365_refs == []
+        assert "old-tag" in entry.tags
+
+    def test_rebuild_refs_index_includes_m365_refs(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nFrom [ol:outlook-internal/msg123]",
+        )
+        # Wipe index
+        (fs.root / "_refs-index.json").write_text('{"entries": {}}', encoding="utf-8")
+        fs.rebuild_refs_index()
+        index = fs.load_refs_index()
+        entry = index.entries.get("projects/test-proj/notes/note.md")
+        assert entry is not None
+        assert len(entry.m365_refs) == 1
+        assert entry.m365_refs[0].type == "ol"
+
+    def test_get_refs_for_m365_source_id(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.write_file(
+            "projects/test-proj/notes/note.md",
+            "# Note\n\nSee [sp:sp-contracts/file.pdf]",
+        )
+        results = fs.get_refs_for("sp-contracts")
+        assert "projects/test-proj/notes/note.md" in results
+
+
+class TestResolveM365Ref:
+    """TestResolveM365Ref — resolves registered source, errors on unknown."""
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+    def test_resolve_sp_ref(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "sharepoint", id="sp-contracts",
+            label="Contracts library",
+            site_url="https://company.sharepoint.com/sites/acme",
+            library="Contracts",
+        )
+        result = fs.resolve_m365_ref("test-proj", "sp:sp-contracts/msa-v2.pdf")
+        assert "error" not in result
+        assert result["source_id"] == "sp-contracts"
+        assert result["type"] == "sharepoint"
+        assert result["path"] == "msa-v2.pdf"
+        assert result["m365_available"] is False
+        assert result["site_url"] == "https://company.sharepoint.com/sites/acme"
+
+    def test_resolve_tm_ref(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general",
+            label="General channel", channel_id="19:abc123",
+        )
+        result = fs.resolve_m365_ref("test-proj", "tm:teams-general/msg-456")
+        assert "error" not in result
+        assert result["type"] == "teams"
+        assert result["message_id"] == "msg-456"
+        assert result["m365_available"] is False
+
+    def test_resolve_ol_ref(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "outlook", id="outlook-internal",
+            label="Internal thread", folder_id="AAMkAGI2",
+        )
+        result = fs.resolve_m365_ref("test-proj", "ol:outlook-internal")
+        assert "error" not in result
+        assert result["type"] == "outlook"
+        assert result["folder_id"] == "AAMkAGI2"
+
+    def test_resolve_unknown_source_returns_error(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general",
+            label="General", channel_id="19:abc",
+        )
+        result = fs.resolve_m365_ref("test-proj", "sp:unknown-source/file.pdf")
+        assert "error" in result
+        assert "not registered" in result["error"]
+
+    def test_resolve_missing_sync_yaml_returns_error(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        # No _sync.yaml created
+        result = fs.resolve_m365_ref("test-proj", "sp:sp-contracts/file.pdf")
+        assert "error" in result
+        assert "No M365 sources" in result["error"]
+
+    def test_resolve_with_brackets(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "sharepoint", id="sp-contracts",
+            label="Contracts library",
+            site_url="https://company.sharepoint.com",
+            library="Contracts",
+        )
+        # With brackets as they would appear in markdown
+        result = fs.resolve_m365_ref("test-proj", "[sp:sp-contracts]")
+        assert "error" not in result
+        assert result["source_id"] == "sp-contracts"
+
+    def test_resolve_detects_local_doc(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "sharepoint", id="sp-contracts",
+            label="Contracts library",
+            site_url="https://company.sharepoint.com",
+            library="Contracts",
+        )
+        # Create local doc copy
+        docs_dir = fs.root / "projects" / "test-proj" / "docs"
+        docs_dir.mkdir(exist_ok=True)
+        (docs_dir / "msa-v2.pdf").write_bytes(b"PDF content")
+        result = fs.resolve_m365_ref("test-proj", "sp:sp-contracts/msa-v2.pdf")
+        assert result["local_doc"] is not None
+        assert "msa-v2.pdf" in result["local_doc"]
+
+    def test_resolve_detects_knowledge_entry(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "sharepoint", id="sp-contracts",
+            label="Contracts library",
+            site_url="https://company.sharepoint.com",
+            library="Contracts",
+        )
+        # Write a knowledge entry referencing sp-contracts
+        fs.write_file(
+            "projects/test-proj/knowledge/contract-summary.md",
+            "---\nsource: null\nprocessed: null\nmethod: null\nmodel: null\nprompt_ref: null\n---\n\n"
+            "# Contract Summary\n\nSee [sp:sp-contracts/msa-v2.pdf]",
+        )
+        result = fs.resolve_m365_ref("test-proj", "sp:sp-contracts/msa-v2.pdf")
+        assert result["knowledge_entry"] is not None
+        assert "contract-summary" in result["knowledge_entry"]
+
+
+class TestListDueForSync:
+    """TestListDueForSync — overdue detection, manual never returned, disabled skipped."""
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+    def test_never_processed_is_overdue(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general",
+            label="General", channel_id="19:abc",
+        )
+        results = fs.list_projects_due_for_sync()
+        assert any(r["slug"] == "test-proj" for r in results)
+
+    def test_recently_processed_not_overdue(self, fs):
+        from datetime import datetime, timezone
+
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general",
+            label="General", channel_id="19:abc",
+        )
+        # Just processed
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fs.update_sync_state(
+            "test-proj", "teams", "teams-general",
+            {"last_processed_at": now_str},
+        )
+        results = fs.list_projects_due_for_sync()
+        slugs = [r["slug"] for r in results]
+        assert "test-proj" not in slugs
+
+    def test_disabled_source_not_included(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-disabled",
+            label="Disabled", channel_id="19:abc", enabled=False,
+        )
+        results = fs.list_projects_due_for_sync()
+        slugs = [r["slug"] for r in results]
+        assert "test-proj" not in slugs
+
+    def test_no_sync_yaml_not_returned(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        results = fs.list_projects_due_for_sync()
+        slugs = [r["slug"] for r in results]
+        assert "test-proj" not in slugs
+
+    def test_manual_frequency_never_returned(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-manual",
+            label="Manual", channel_id="19:abc",
+        )
+        # Set correspondence_frequency to manual
+        raw = fs._load_sync_state_raw("test-proj")
+        raw["pipeline"]["correspondence_frequency"] = "manual"
+        fs._save_sync_state_raw("test-proj", raw)
+        results = fs.list_projects_due_for_sync()
+        slugs = [r["slug"] for r in results]
+        assert "test-proj" not in slugs
+
+    def test_list_due_returns_overdue_source_metadata(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general",
+            label="General", channel_id="19:abc",
+        )
+        results = fs.list_projects_due_for_sync()
+        project = next((r for r in results if r["slug"] == "test-proj"), None)
+        assert project is not None
+        assert len(project["overdue_sources"]) == 1
+        src = project["overdue_sources"][0]
+        assert src["id"] == "teams-general"
+        assert src["type"] == "teams"
+        assert src["label"] == "General"
+
+
+class TestListDueForSynthesis:
+    """Tests for list_projects_due_for_synthesis."""
+
+    @pytest.fixture
+    def fs(self, tmp_path):
+        memory_fs = MemoryFS(tmp_path)
+        memory_fs.initialise()
+        return memory_fs
+
+    def test_overdue_synthesis_returned(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general",
+            label="General", channel_id="19:abc",
+        )
+        # Set next_knowledge_synthesis to past date
+        fs.update_sync_state("test-proj", "pipeline", "", {
+            "next_knowledge_synthesis": "2020-01-01",
+        })
+        results = fs.list_projects_due_for_synthesis()
+        assert any(r["slug"] == "test-proj" for r in results)
+
+    def test_future_synthesis_not_returned(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general",
+            label="General", channel_id="19:abc",
+        )
+        fs.update_sync_state("test-proj", "pipeline", "", {
+            "next_knowledge_synthesis": "2099-12-31",
+        })
+        results = fs.list_projects_due_for_synthesis()
+        slugs = [r["slug"] for r in results]
+        assert "test-proj" not in slugs
+
+    def test_null_synthesis_not_returned(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj", "teams", id="teams-general",
+            label="General", channel_id="19:abc",
+        )
+        results = fs.list_projects_due_for_synthesis()
+        slugs = [r["slug"] for r in results]
+        assert "test-proj" not in slugs
+
+    def test_no_sync_yaml_not_returned(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        results = fs.list_projects_due_for_synthesis()
+        slugs = [r["slug"] for r in results]
+        assert "test-proj" not in slugs
+
+
+class TestM365GuideResource:
+    """TestM365GuideResource — resource exists, contains all section headings."""
+
+    _REQUIRED_HEADINGS = [
+        "## M365 availability model",
+        "## M365 reference syntax",
+        "## Source registry",
+        "## Sync state tools",
+        "## _sync.yaml schema",
+        "## Pipeline integration note",
+    ]
+
+    def _call(self, server, tool: str, **kwargs):
+        return asyncio.run(server.call_tool(tool, kwargs))
+
+    def test_m365_resource_exists(self, mcp_server):
+        resources = asyncio.run(mcp_server.list_resources())
+        uris = [str(r.uri) for r in resources]
+        assert "memory://m365" in uris
+
+    def test_m365_resource_contains_all_sections(self, mcp_server):
+        result = asyncio.run(mcp_server.read_resource("memory://m365"))
+        text = result.contents[0].content
+        for heading in self._REQUIRED_HEADINGS:
+            assert heading in text, f"Missing section heading: {heading!r}"
+
+    def test_m365_resource_is_string(self, mcp_server):
+        result = asyncio.run(mcp_server.read_resource("memory://m365"))
+        assert isinstance(result.contents[0].content, str)
+        assert len(result.contents[0].content) > 100
+
+    def test_m365_resource_source_registry_empty_by_default(self, mcp_server):
+        result = asyncio.run(mcp_server.read_resource("memory://m365"))
+        text = result.contents[0].content
+        assert "No M365 sources registered" in text
+
+    def test_m365_resource_source_registry_shows_live_sources(self, mcp_server):
+        self._call(
+            mcp_server, "create_project", slug="m365-proj", name="M365 Test"
+        )
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="m365-proj",
+            source_type="teams",
+            id="teams-general",
+            label="General channel",
+            channel_id="19:abc123",
+        )
+        result = asyncio.run(mcp_server.read_resource("memory://m365"))
+        text = result.contents[0].content
+        assert "m365-proj" in text
+        assert "teams-general" in text
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)
+
+
+class TestSyncYamlProtections:
+    """_sync.yaml must be protected from direct write, read, and delete."""
+
+    def _call(self, server, tool: str, **kwargs):
+        return asyncio.run(server.call_tool(tool, kwargs))
+
+    def test_write_file_blocks_sync_yaml(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="prot-proj", name="Prot")
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "write_file",
+                path="projects/prot-proj/_sync.yaml",
+                content="bad content",
+            )
+        )
+        assert "error" in r
+        assert "_sync.yaml" in r["error"]
+
+    def test_read_file_blocks_sync_yaml(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="prot-proj", name="Prot")
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="prot-proj",
+            source_type="teams",
+            id="t1",
+            label="T1",
+            channel_id="19:abc",
+        )
+        r = parse_result(
+            self._call(mcp_server, "read_file", path="projects/prot-proj/_sync.yaml")
+        )
+        assert "error" in r
+        assert "_sync.yaml" in r["error"]
+
+    def test_delete_file_blocks_sync_yaml(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="prot-proj", name="Prot")
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="prot-proj",
+            source_type="teams",
+            id="t1",
+            label="T1",
+            channel_id="19:abc",
+        )
+        r = parse_result(
+            self._call(mcp_server, "delete_file", path="projects/prot-proj/_sync.yaml")
+        )
+        assert "error" in r
+
+    def test_sync_yaml_not_in_manifest(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="prot-proj", name="Prot")
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="prot-proj",
+            source_type="teams",
+            id="t1",
+            label="T1",
+            channel_id="19:abc",
+        )
+        # Rebuild manifest and check _sync.yaml not included
+        self._call(mcp_server, "update_manifest", folder_path="projects/prot-proj")
+        manifest_result = parse_result(
+            self._call(mcp_server, "get_folder_manifest", folder_path="projects/prot-proj")
+        )
+        assert "_sync.yaml" not in manifest_result["result"]
+
+    def test_search_files_skips_sync_yaml(self, mcp_server):
+        # search_files only searches .md files, so _sync.yaml is already excluded
+        self._call(mcp_server, "create_project", slug="prot-proj", name="Prot")
+        r = parse_result(
+            self._call(mcp_server, "search_files", keyword="yaml", project_slug="prot-proj")
+        )
+        assert "error" not in r
+        # No _sync.yaml results (it's yaml, not md)
+        if r["result"]:
+            for hit in r["result"]:
+                assert "_sync.yaml" not in hit["path"]
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)
+
+
+class TestMCPSyncStateTools:
+    """Integration tests for MCP sync state tools."""
+
+    def _call(self, server, tool: str, **kwargs):
+        return asyncio.run(server.call_tool(tool, kwargs))
+
+    def test_get_sync_state_missing(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="sync-proj", name="Sync")
+        r = parse_result(self._call(mcp_server, "get_sync_state", project_slug="sync-proj"))
+        assert "error" not in r
+        assert r["result"] is None
+        assert "No sync state found" in r["warnings"]
+
+    def test_add_sync_source_tool(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="sync-proj", name="Sync")
+        r = parse_result(
+            self._call(
+                mcp_server, "add_sync_source",
+                project_slug="sync-proj",
+                source_type="teams",
+                id="teams-general",
+                label="General channel",
+                channel_id="19:abc123",
+            )
+        )
+        assert "error" not in r
+        assert r["result"]["id"] == "teams-general"
+
+    def test_add_sync_source_invalid_type(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="sync-proj", name="Sync")
+        r = parse_result(
+            self._call(
+                mcp_server, "add_sync_source",
+                project_slug="sync-proj",
+                source_type="invalid",
+                id="x",
+                label="X",
+            )
+        )
+        assert "error" in r
+
+    def test_update_sync_state_tool(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="sync-proj", name="Sync")
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="sync-proj",
+            source_type="teams",
+            id="teams-general",
+            label="General",
+            channel_id="19:abc",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server, "update_sync_state",
+                project_slug="sync-proj",
+                source_type="teams",
+                source_id="teams-general",
+                fields={"last_processed_at": "2025-03-28T06:00:00Z"},
+            )
+        )
+        assert "error" not in r
+        assert r["result"]["last_processed_at"] == "2025-03-28T06:00:00Z"
+
+    def test_list_projects_due_for_sync_tool(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="sync-proj", name="Sync")
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="sync-proj",
+            source_type="teams",
+            id="teams-general",
+            label="General",
+            channel_id="19:abc",
+        )
+        r = parse_result(self._call(mcp_server, "list_projects_due_for_sync"))
+        assert "error" not in r
+        slugs = [p["slug"] for p in r["result"]]
+        assert "sync-proj" in slugs
+
+    def test_list_projects_due_for_synthesis_tool(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="synth-proj", name="Synth")
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="synth-proj",
+            source_type="teams",
+            id="t1",
+            label="T1",
+            channel_id="19:abc",
+        )
+        self._call(
+            mcp_server, "update_sync_state",
+            project_slug="synth-proj",
+            source_type="pipeline",
+            source_id="",
+            fields={"next_knowledge_synthesis": "2020-01-01"},
+        )
+        r = parse_result(self._call(mcp_server, "list_projects_due_for_synthesis"))
+        assert "error" not in r
+        slugs = [p["slug"] for p in r["result"]]
+        assert "synth-proj" in slugs
+
+    def test_resolve_m365_ref_tool(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="ref-proj", name="Ref")
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="ref-proj",
+            source_type="sharepoint",
+            id="sp-contracts",
+            label="Contracts library",
+            site_url="https://company.sharepoint.com/sites/acme",
+            library="Contracts",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server, "resolve_m365_ref",
+                project_slug="ref-proj",
+                ref="sp:sp-contracts/msa-v2.pdf",
+            )
+        )
+        assert "error" not in r
+        assert r["result"]["source_id"] == "sp-contracts"
+        assert r["result"]["m365_available"] is False
+
+    def test_get_project_context_deep_includes_sync(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="deep-sync-proj", name="Deep Sync")
+        r = parse_result(
+            self._call(mcp_server, "get_project_context", slug="deep-sync-proj", deep=True)
+        )
+        assert "error" not in r
+        assert "sync" in r["result"]
+        assert r["result"]["sync"] is None  # No _sync.yaml yet
+
+    def test_get_project_context_deep_includes_sync_content(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="deep-sync2-proj", name="Deep Sync 2")
+        self._call(
+            mcp_server, "add_sync_source",
+            project_slug="deep-sync2-proj",
+            source_type="teams",
+            id="teams-general",
+            label="General",
+            channel_id="19:abc",
+        )
+        r = parse_result(
+            self._call(mcp_server, "get_project_context", slug="deep-sync2-proj", deep=True)
+        )
+        assert "error" not in r
+        assert r["result"]["sync"] is not None
+        assert "sources" in r["result"]["sync"]
 
     @pytest.fixture
     def mcp_server(self, tmp_path):

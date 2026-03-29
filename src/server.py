@@ -19,10 +19,11 @@ import fastmcp
 from filesystem import (
     MemoryFS,
     is_manifest,
+    is_sync_yaml,
     to_kebab_case,
     validate_knowledge_frontmatter,
 )
-from guide import generate_guide
+from guide import generate_guide, generate_m365_guide
 from models import (
     FolderManifest,
     ManifestEntry,
@@ -146,6 +147,9 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                     if people_path.exists()
                     else None
                 )
+                # Sync state (_sync.yaml) — null if not configured
+                sync_result = fs.get_sync_state(slug)
+                result["sync"] = sync_result.get("result")
 
             return {"result": result, "warnings": warnings}
         except Exception as e:
@@ -165,14 +169,22 @@ def create_server(root: Path) -> fastmcp.FastMCP:
 
     @mcp.tool
     def read_file(path: str) -> dict[str, Any]:
-        """Read a file.  Blocks direct reads of _index.yaml (use get_folder_manifest)."""
+        """Read a file.  Blocks direct reads of _index.yaml (use get_folder_manifest) and _sync.yaml (use get_sync_state)."""
         try:
             abs_path = fs._safe_path(path)
-            if is_manifest(abs_path):
+            if abs_path.name.lower() == "_index.yaml":
                 return {
                     "error": (
                         "_index.yaml should not be read directly. "
                         "Use get_folder_manifest tool to get a rendered view."
+                    ),
+                    "warnings": [],
+                }
+            if is_sync_yaml(abs_path):
+                return {
+                    "error": (
+                        "_sync.yaml should not be read directly. "
+                        "Use get_sync_state tool to read M365 sync configuration."
                     ),
                     "warnings": [],
                 }
@@ -842,6 +854,115 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             return {"error": str(e), "warnings": []}
 
     # -----------------------------------------------------------------------
+    # Sync state tools (M365 integration)
+    # -----------------------------------------------------------------------
+
+    @mcp.tool
+    def get_sync_state(project_slug: str) -> dict[str, Any]:
+        """Read _sync.yaml for a project.  Returns null result with warning if missing."""
+        try:
+            return fs.get_sync_state(project_slug)
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def update_sync_state(
+        project_slug: str,
+        source_type: str,
+        source_id: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update watermark fields for a specific source after pipeline processing.
+
+        source_type: "teams" | "outlook" | "sharepoint" | "pipeline"
+        source_id: the id field of the source to update (ignored for pipeline)
+        fields: dict of allowed fields to merge into the source entry
+        """
+        try:
+            return fs.update_sync_state(project_slug, source_type, source_id, fields)
+        except ValueError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def add_sync_source(
+        project_slug: str,
+        source_type: str,
+        id: str,
+        label: str,
+        channel_id: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        site_url: Optional[str] = None,
+        library: Optional[str] = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Register a new M365 source for a project.
+
+        source_type: "teams" | "outlook" | "sharepoint"
+        id: kebab-case, unique within source_type for this project
+        label: human-readable name
+        For teams: channel_id required.
+        For outlook: folder_id required.
+        For sharepoint: site_url and library required.
+        """
+        try:
+            kwargs: dict[str, Any] = {}
+            if channel_id is not None:
+                kwargs["channel_id"] = channel_id
+            if folder_id is not None:
+                kwargs["folder_id"] = folder_id
+            if site_url is not None:
+                kwargs["site_url"] = site_url
+            if library is not None:
+                kwargs["library"] = library
+            return fs.add_sync_source(
+                project_slug, source_type, id=id, label=label, enabled=enabled, **kwargs
+            )
+        except ValueError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def list_projects_due_for_sync(
+        frequency: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Return projects where a sync run is overdue.
+
+        frequency: "daily" | "weekly" | null (returns all overdue regardless of frequency)
+        """
+        try:
+            results = fs.list_projects_due_for_sync(frequency=frequency)
+            return {"result": results, "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def list_projects_due_for_synthesis() -> dict[str, Any]:
+        """Return projects where a knowledge synthesis run is overdue."""
+        try:
+            results = fs.list_projects_due_for_synthesis()
+            return {"result": results, "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def resolve_m365_ref(project_slug: str, ref: str) -> dict[str, Any]:
+        """Resolve an M365 reference token to its full metadata.
+
+        ref: e.g. "sp:sp-contracts/msa-v2.pdf" or "[sp:sp-contracts/msa-v2.pdf]"
+        Never calls M365 directly — returns local metadata only (m365_available: false).
+        """
+        try:
+            result = fs.resolve_m365_ref(project_slug, ref)
+            if "error" in result:
+                return {"error": result["error"], "warnings": []}
+            return {"result": result, "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    # -----------------------------------------------------------------------
     # Resources
     # -----------------------------------------------------------------------
 
@@ -849,6 +970,11 @@ def create_server(root: Path) -> fastmcp.FastMCP:
     def get_server_guide() -> str:
         """Structural reference for this server — read once per session before using any tool."""
         return generate_guide(mcp, root)
+
+    @mcp.resource("memory://m365")
+    def get_m365_guide() -> str:
+        """M365 integration reference — source registration, reference syntax, sync state tools."""
+        return generate_m365_guide(mcp, root)
 
     return mcp
 

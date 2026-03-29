@@ -143,3 +143,21 @@ ROOT_MANIFEST_TEMPLATE = """\
 last_updated: "{date}"
 projects: []
 """
+
+SYNC_YAML_TEMPLATE = """\
+# Auto-managed by sync pipeline. Do not edit manually.
+# Missing file = no M365 sources configured for this project. Not an error.
+
+last_sync: null
+
+sources:
+  teams: []
+  outlook: []
+  sharepoint: []
+
+pipeline:
+  correspondence_frequency: daily
+  knowledge_frequency: weekly
+  last_knowledge_synthesis: null
+  next_knowledge_synthesis: null
+"""
