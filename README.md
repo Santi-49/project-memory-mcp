@@ -69,6 +69,31 @@ Add the following to your `claude_desktop_config.json`:
 }
 ```
 
+### Packaging the Claude Skill
+
+This repository includes a Claude skill in [project-memory-mcp-skill](project-memory-mcp-skill).
+To use it in Claude, package that folder as a zip and upload it in Claude's skill import UI.
+
+Expected skill contents:
+- [project-memory-mcp-skill/SKILL.md](project-memory-mcp-skill/SKILL.md)
+- [project-memory-mcp-skill/references](project-memory-mcp-skill/references)
+
+Create the zip from the repository root:
+
+```powershell
+# Windows PowerShell
+Compress-Archive -Path .\skill\* -DestinationPath .\project-memory-mcp-skill.zip -Force
+```
+
+```bash
+# macOS / Linux
+cd skill
+zip -r ../project-memory-mcp-skill.zip .
+cd ..
+```
+
+Then upload the generated zip archive (for example, project-memory-mcp-skill.zip) to Claude.
+
 ### Debugging with MCP Inspector
 
 Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to interactively explore and test all tools from a browser UI:

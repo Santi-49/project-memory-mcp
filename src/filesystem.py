@@ -46,6 +46,7 @@ from templates import (
 
 _KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_UTC_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|\+00:00)$")
 _REF_RE = re.compile(r"@([a-z0-9-]+)")
 _TAG_RE = re.compile(r"#([a-z0-9-]+)")
 _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
@@ -95,6 +96,19 @@ def validate_date(s: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def validate_utc_timestamp(s: str) -> bool:
+    """Return True if s is a valid UTC timestamp with seconds: YYYY-MM-DDTHH:MM:SSZ or +00:00."""
+    if not _UTC_TS_RE.match(s):
+        return False
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        return False
+    return dt.utcoffset() == timezone.utc.utcoffset(None)
 
 
 def is_append_only(path: Path) -> bool:
@@ -233,9 +247,13 @@ def parse_refs(content: str) -> dict[str, Any]:
                 continue
             seen_m365.add(key)
             if ref_type == "sp":
-                m365_refs.append(M365Ref(type=ref_type, source_id=source_id, path=remainder))
+                m365_refs.append(
+                    M365Ref(type=ref_type, source_id=source_id, path=remainder)
+                )
             else:
-                m365_refs.append(M365Ref(type=ref_type, source_id=source_id, message_id=remainder))
+                m365_refs.append(
+                    M365Ref(type=ref_type, source_id=source_id, message_id=remainder)
+                )
         except Exception:
             continue
     internal_refs: list[InternalRef] = []
@@ -914,7 +932,9 @@ class MemoryFS:
         # Warn on unresolved refs
         parsed = parse_refs(content)
         warnings.extend(self.warn_unresolved_refs(parsed["refs"]))
-        warnings.extend(self.warn_unresolved_internal_refs(parsed.get("internal_refs", [])))
+        warnings.extend(
+            self.warn_unresolved_internal_refs(parsed.get("internal_refs", []))
+        )
 
         # Update manifest
         folder = abs_path.parent
@@ -955,7 +975,9 @@ class MemoryFS:
         self.update_refs_for_file(rel_path, full_content)
         parsed = parse_refs(content)
         warnings.extend(self.warn_unresolved_refs(parsed["refs"]))
-        warnings.extend(self.warn_unresolved_internal_refs(parsed.get("internal_refs", [])))
+        warnings.extend(
+            self.warn_unresolved_internal_refs(parsed.get("internal_refs", []))
+        )
 
         # Force a manifest rebuild for this folder to ensure new file is indexed
         self.rebuild_manifest(abs_path.parent)
@@ -1078,7 +1100,9 @@ class MemoryFS:
                 )
         return warnings
 
-    def warn_unresolved_internal_refs(self, internal_refs: list[InternalRef]) -> list[str]:
+    def warn_unresolved_internal_refs(
+        self, internal_refs: list[InternalRef]
+    ) -> list[str]:
         """Return warning strings for any [mem:path] refs where the target file doesn't exist."""
         warnings: list[str] = []
         for ref in internal_refs:
@@ -1112,7 +1136,9 @@ class MemoryFS:
                 results.append(rel_path)
                 continue
             # Also check internal_refs path (exact or filename match)
-            if any(r.path == ref or Path(r.path).name == ref for r in entry.internal_refs):
+            if any(
+                r.path == ref or Path(r.path).name == ref for r in entry.internal_refs
+            ):
                 results.append(rel_path)
         return results
 
@@ -1593,19 +1619,42 @@ class MemoryFS:
             raw = self._minimal_sync_state()
 
         _ALLOWED_SOURCE_FIELDS = {
-            "last_processed_at", "last_message_id", "last_modified_etag",
-            "unprocessed_count", "enabled",
+            "last_processed_at",
+            "last_message_id",
+            "last_modified_etag",
+            "unprocessed_count",
+            "enabled",
         }
         _ALLOWED_PIPELINE_FIELDS = {
-            "last_knowledge_synthesis", "next_knowledge_synthesis",
-            "correspondence_frequency", "knowledge_frequency",
+            "last_knowledge_synthesis",
+            "next_knowledge_synthesis",
+            "correspondence_frequency",
+            "knowledge_frequency",
         }
+        _ALLOWED_FREQUENCIES = {"daily", "weekly", "manual"}
 
         if source_type == "pipeline":
             pipeline = raw.setdefault("pipeline", {})
             for k, v in fields.items():
                 if k == "last_sync":
+                    if v is not None and not (
+                        isinstance(v, str) and validate_utc_timestamp(v)
+                    ):
+                        raise ValueError(
+                            "last_sync must be ISO 8601 UTC with seconds "
+                            "(YYYY-MM-DDTHH:MM:SSZ or +00:00) or null"
+                        )
                     raw["last_sync"] = v
+                elif k in {"last_knowledge_synthesis", "next_knowledge_synthesis"}:
+                    if v is not None and not (isinstance(v, str) and validate_date(v)):
+                        raise ValueError(f"{k} must be YYYY-MM-DD format or null")
+                    pipeline[k] = v
+                elif k in {"correspondence_frequency", "knowledge_frequency"}:
+                    if not isinstance(v, str) or v not in _ALLOWED_FREQUENCIES:
+                        raise ValueError(
+                            f"{k} must be one of {sorted(_ALLOWED_FREQUENCIES)}"
+                        )
+                    pipeline[k] = v
                 elif k in _ALLOWED_PIPELINE_FIELDS:
                     pipeline[k] = v
                 else:
@@ -1630,6 +1679,14 @@ class MemoryFS:
         for k, v in fields.items():
             if k not in _ALLOWED_SOURCE_FIELDS:
                 raise ValueError(f"Field {k!r} is not allowed on source entries")
+            if k == "last_processed_at":
+                if v is not None and not (
+                    isinstance(v, str) and validate_utc_timestamp(v)
+                ):
+                    raise ValueError(
+                        "last_processed_at must be ISO 8601 UTC with seconds "
+                        "(YYYY-MM-DDTHH:MM:SSZ or +00:00) or null"
+                    )
             target[k] = v
 
         self._save_sync_state_raw(project_slug, raw)
@@ -1767,19 +1824,23 @@ class MemoryFS:
                             is_overdue = True
 
                     if is_overdue:
-                        overdue_sources.append({
-                            "id": source.get("id"),
-                            "type": src_type,
-                            "label": source.get("label"),
-                            "last_processed_at": last_processed,
-                        })
+                        overdue_sources.append(
+                            {
+                                "id": source.get("id"),
+                                "type": src_type,
+                                "label": source.get("label"),
+                                "last_processed_at": last_processed,
+                            }
+                        )
 
             if overdue_sources:
-                results.append({
-                    "slug": slug,
-                    "name": project.name,
-                    "overdue_sources": overdue_sources,
-                })
+                results.append(
+                    {
+                        "slug": slug,
+                        "name": project.name,
+                        "overdue_sources": overdue_sources,
+                    }
+                )
 
         return results
 
@@ -1801,18 +1862,20 @@ class MemoryFS:
                 continue
 
             if next_synthesis <= today:
-                results.append({
-                    "slug": slug,
-                    "name": project.name,
-                    "last_knowledge_synthesis": pipeline.get("last_knowledge_synthesis"),
-                    "next_knowledge_synthesis": next_synthesis,
-                })
+                results.append(
+                    {
+                        "slug": slug,
+                        "name": project.name,
+                        "last_knowledge_synthesis": pipeline.get(
+                            "last_knowledge_synthesis"
+                        ),
+                        "next_knowledge_synthesis": next_synthesis,
+                    }
+                )
 
         return results
 
-    def resolve_m365_ref(
-        self, project_slug: str, ref: str
-    ) -> dict[str, Any]:
+    def resolve_m365_ref(self, project_slug: str, ref: str) -> dict[str, Any]:
         """Resolve an M365 reference token to its full metadata.
 
         Never calls M365 directly — returns local metadata only.

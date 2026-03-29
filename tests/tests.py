@@ -14,6 +14,7 @@ from filesystem import (
     is_updates_folder,
     parse_refs,
     to_kebab_case,
+    validate_utc_timestamp,
     validate_knowledge_frontmatter,
 )
 from models import (
@@ -169,6 +170,23 @@ class TestValidateKnowledgeFrontmatter:
         ok, errors = validate_knowledge_frontmatter(content)
         assert ok
         assert errors == []
+
+
+class TestValidateUtcTimestamp:
+    def test_accepts_zulu(self):
+        assert validate_utc_timestamp("2025-03-28T06:00:00Z")
+
+    def test_accepts_explicit_utc_offset(self):
+        assert validate_utc_timestamp("2025-03-28T06:00:00+00:00")
+
+    def test_rejects_missing_seconds(self):
+        assert not validate_utc_timestamp("2025-03-28T06:00Z")
+
+    def test_rejects_non_utc_offset(self):
+        assert not validate_utc_timestamp("2025-03-28T06:00:00+01:00")
+
+    def test_rejects_date_only(self):
+        assert not validate_utc_timestamp("2025-03-28")
 
 
 # ---------------------------------------------------------------------------
@@ -1595,6 +1613,57 @@ class TestSyncState:
                 {"last_processed_at": "2025-03-28T06:00:00Z"},
             )
 
+    def test_update_sync_state_rejects_invalid_last_processed_at(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj",
+            "teams",
+            id="teams-general",
+            label="General",
+            channel_id="19:abc",
+        )
+        with pytest.raises(ValueError, match="last_processed_at"):
+            fs.update_sync_state(
+                "test-proj",
+                "teams",
+                "teams-general",
+                {"last_processed_at": "2025-03-28"},
+            )
+
+    def test_update_sync_state_pipeline_rejects_invalid_last_sync(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj",
+            "teams",
+            id="teams-general",
+            label="General",
+            channel_id="19:abc",
+        )
+        with pytest.raises(ValueError, match="last_sync"):
+            fs.update_sync_state(
+                "test-proj",
+                "pipeline",
+                "",
+                {"last_sync": "2025-03-28"},
+            )
+
+    def test_update_sync_state_pipeline_rejects_invalid_synthesis_date(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.add_sync_source(
+            "test-proj",
+            "teams",
+            id="teams-general",
+            label="General",
+            channel_id="19:abc",
+        )
+        with pytest.raises(ValueError, match="last_knowledge_synthesis"):
+            fs.update_sync_state(
+                "test-proj",
+                "pipeline",
+                "",
+                {"last_knowledge_synthesis": "2025-03-28T06:00:00Z"},
+            )
+
     def test_update_sync_state_pipeline(self, fs):
         fs.scaffold_project("test-proj", make_meta())
         fs.add_sync_source(
@@ -2592,6 +2661,30 @@ class TestMCPSyncStateTools:
         )
         assert "error" not in r
         assert r["result"]["last_processed_at"] == "2025-03-28T06:00:00Z"
+
+    def test_update_sync_state_tool_rejects_invalid_timestamp(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="sync-proj", name="Sync")
+        self._call(
+            mcp_server,
+            "add_sync_source",
+            project_slug="sync-proj",
+            source_type="teams",
+            id="teams-general",
+            label="General",
+            channel_id="19:abc",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "update_sync_state",
+                project_slug="sync-proj",
+                source_type="teams",
+                source_id="teams-general",
+                fields={"last_processed_at": "2025-03-28"},
+            )
+        )
+        assert "error" in r
+        assert "last_processed_at" in r["error"]
 
     def test_list_projects_due_for_sync_tool(self, mcp_server):
         self._call(mcp_server, "create_project", slug="sync-proj", name="Sync")
