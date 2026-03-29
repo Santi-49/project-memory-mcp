@@ -45,7 +45,7 @@ Load the essential context for a project in a single call.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `slug` | string | yes | Project slug (kebab-case) |
-| `deep` | boolean | no | Default `false`. When `true`, additionally returns `knowledge/_index.yaml` manifest and `people.md` content |
+| `deep` | boolean | no | Default `false`. When `true`, additionally returns `knowledge/_index.yaml` manifest and auto-managed `people.md` content |
 
 **Shallow result (default):**
 ```json
@@ -97,9 +97,12 @@ Write a file with all rules enforced:
 - Filename must be kebab-case (underscores and spaces are converted automatically during validation).
 - `_index.yaml` cannot be written directly.
 - `updates/*.md` and `decisions.md` are append-only (use `append_to_file`).
+- `projects/{slug}/people.md` is auto-managed and cannot be written directly.
 - Knowledge entries in `knowledge/` must have valid YAML frontmatter.
 - `_meta.yaml`, `_guide.md`, `_status.md` are allowed (prefix `_` bypasses kebab enforcement).
 - `@refs` that cannot be resolved in `_global/` produce warnings (not errors).
+
+For existing files, read current content first to avoid unintended overwrite.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -126,6 +129,8 @@ Append content to an append-only file. Only allowed for:
 Appending to `updates/` sets `last_entry_date` on the folder manifest (does **not** mark it stale).  
 Appending to `decisions.md` marks the project manifest stale.
 
+Read the target file first when appending context-sensitive updates.
+
 ---
 
 ### `create_project`
@@ -148,7 +153,7 @@ projects/{slug}/
 ├── _guide.md           ← folder structure reference (human-editable)
 ├── _index.yaml         ← auto-managed manifest
 ├── _meta.yaml          ← project metadata
-├── people.md
+├── people.md           ← auto-managed people linked from global profiles
 ├── companies.md
 ├── decisions.md
 ├── knowledge/
@@ -262,6 +267,8 @@ Returns an array of `{path, line_no, line}` objects.
 
 Soft-delete a file by moving it to `_trash/{timestamp}_{filename}`. Removes the manifest entry. Does **not** remove cross-references from `_refs-index.json` (use `rebuild_refs_index` if needed).
 
+`projects/{slug}/people.md` is auto-managed and cannot be deleted.
+
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | Path relative to memory root |
@@ -288,23 +295,92 @@ No parameters. Use this when the refs index has drifted out of sync — for exam
 
 ### `create_person`
 
-Create a person profile in `_global/people/{slug}.md` and update the people manifest.
+Create a global person profile in `_global/people/{slug}.md` and update the people manifest.
+
+Before creating, call `list_global_people` first (and optionally `list_global_companies` / `resolve_ref`) to avoid duplicate entities.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `slug` | string | yes | Kebab-case identifier (must be unique within people) |
 | `name` | string | yes | Full name |
 | `title` | string | no | Job title |
-| `company` | string | no | Associated company name |
+| `company` | string | no | Associated company (defaults to `Other`) |
 | `email` | string | no | Email address |
 | `phone` | string | no | Phone number |
+| `global_description` | string | no | Editable global description field inside the person profile |
+| `project_slug` | string | no | Existing project slug; if provided, links person to that project after creation |
 | `description` | string | no | One-line description written to manifest entry |
+
+The person file keeps a canonical `## Projects` section that is managed by relationship tools.
+It also includes a manually editable `## Notes` section managed through `edit_person_notes`.
+
+---
+
+### `update_person`
+
+Update a global person profile in `_global/people/{slug}.md` and refresh linked project `people.md` files.
+
+Read first with `get_person` to avoid overriding manual notes context.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `slug` | string | yes | Person slug |
+| `name` | string | no | Full name |
+| `title` | string | no | Job title |
+| `company` | string | no | Associated company (empty value becomes `Other`) |
+| `email` | string | no | Email address |
+| `phone` | string | no | Phone number |
+| `global_description` | string | no | Editable global description field inside the person profile |
+| `description` | string | no | Manifest entry description |
+
+---
+
+### `link_person_to_project`
+
+Create a person-project relationship and synchronize both sides:
+- adds `[[project-slug]]` to the global person `## Projects` section
+- regenerates `projects/{slug}/people.md` grouped by company
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `person_slug` | string | yes | Existing global person slug |
+| `project_slug` | string | yes | Existing project slug |
+
+---
+
+### `unlink_person_from_project`
+
+Remove a person-project relationship and synchronize both sides.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `person_slug` | string | yes | Existing global person slug |
+| `project_slug` | string | yes | Existing project slug |
+
+---
+
+### `edit_person_notes`
+
+Edit the manual `## Notes` section in `_global/people/{slug}.md`.
+
+Use this tool only when the user explicitly asks to add or modify manual notes.
+Call `get_person` first to preserve and reason about existing notes before changing them.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `slug` | string | yes | Existing global person slug |
+| `notes` | string | yes | Notes text to apply |
+| `mode` | string | no | `append` (default) or `replace` |
+
+The tool updates the person file and refreshes refs indexing for note content.
 
 ---
 
 ### `create_company`
 
 Create a company profile in `_global/companies/{slug}.md` and update the companies manifest.
+
+Before creating, call `list_global_companies` first (and optionally `list_global_people` / `resolve_ref`) to avoid duplicate entities.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

@@ -13,7 +13,7 @@ projects/{slug}/
 ├── _status.md     ← always-current status: "as of today, blocked on X, next action is Y"
 ├── _guide.md      ← folder structure reference table
 ├── _meta.yaml     ← project metadata (status, type, owner, tags)
-├── people.md      ← key contacts
+├── people.md      ← auto-managed linked people grouped by company
 ├── decisions.md   ← append-only decision log
 ├── knowledge/     ← processed knowledge entries with YAML frontmatter
 ├── updates/       ← chronological append-only update log
@@ -69,6 +69,26 @@ Add the following to your `claude_desktop_config.json`:
 }
 ```
 
+### Debugging with MCP Inspector
+
+Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to interactively explore and test all tools from a browser UI:
+
+```bash
+npx @modelcontextprotocol/inspector python src/server.py --root ./memory-root
+```
+
+Then open `http://localhost:5173` to browse tools, call them with custom parameters, and inspect responses in real time.
+
+If using a virtual environment, point to the environment's Python directly:
+
+```bash
+# Windows
+npx @modelcontextprotocol/inspector .venv\Scripts\python.exe src/server.py --root ./memory-root
+
+# macOS / Linux
+npx @modelcontextprotocol/inspector .venv/bin/python src/server.py --root ./memory-root
+```
+
 ---
 
 ## Quick example
@@ -99,8 +119,12 @@ append_to_file("projects/my-api/decisions.md",
                "\n## 2025-01-15 — Use OAuth2\n\nChosen for security compliance.")
 
 # Create global entities and resolve references
-create_person(slug="john-doe", name="John Doe", title="Lead Engineer")
+create_person(slug="john-doe", name="John Doe", title="Lead Engineer", company="Other", global_description="Platform lead")
 create_company(slug="acme-corp", name="ACME Corp")
+
+# Establish a person-project relationship (updates global person projects + project people.md)
+link_person_to_project(person_slug="john-doe", project_slug="my-api")
+
 resolve_ref("john-doe")           # returns _global/people/john-doe.md
 list_global_people()              # list all people without reading manifests manually
 ```

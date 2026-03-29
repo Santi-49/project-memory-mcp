@@ -49,7 +49,7 @@ projects/{slug}/
 ├── _guide.md           [human]  Folder structure reference table
 ├── _index.yaml         [auto]   Folder manifest with read_when hints per file
 ├── _meta.yaml          [human]  Project metadata
-├── people.md                    Key contacts (@refs to _global/people/)
+├── people.md           [auto]   Project people grouped by company (from global links)
 ├── companies.md                 Company relationships
 ├── decisions.md        [append] Architecture and key decision log
 ├── knowledge/                   LLM-processed entries (require YAML frontmatter)
@@ -94,12 +94,19 @@ last_updated: YYYY-MM-DD"""
 _SECTION_FS_RULES = """\
 ## Filesystem rules
 
+Best practice before mutating existing content:
+- Read current content first (for example get_person, get_company, get_project_context, read_file)
+- Then apply targeted updates to avoid unintentionally overwriting newer notes or fields
+- Before create_person/create_company, check existing entities first (list_global_people/list_global_companies)
+
 Rule                                    Trigger                         Severity
 ──────────────────────────────────────  ──────────────────────────────  ────────
+Destructive operations (delete, etc)    delete_project                  Ask User First
 Path must stay inside memory root       Any path argument               Error
 Filenames must be kebab-case            write_file, create_*            Error
 updates/ and decisions.md append-only   write_file (use append instead) Error
 _index.yaml not writable or readable    write_file, append, read_file   Error
+projects/*/people.md is auto-managed    write_file, delete_file          Error
 Knowledge entries require frontmatter   write_file on knowledge/*.md    Warning
 Unresolved @ref tokens                  write_file, append_to_file      Warning
 Project slugs must be unique            create_project                  Error
@@ -116,20 +123,28 @@ Enforcement details:       docs/filesystem-rules.md"""
 # are always derived from the live FastMCP instance at call time)
 # ---------------------------------------------------------------------------
 
-_GLOBAL_ENTITY_TOOLS: frozenset[str] = frozenset({
-    "create_person",
-    "create_company",
-    "get_person",
-    "get_company",
-    "list_global_people",
-    "list_global_companies",
-    "rebuild_refs_index",
-})
+_GLOBAL_ENTITY_TOOLS: frozenset[str] = frozenset(
+    {
+        "create_person",
+        "create_company",
+        "update_person",
+        "edit_person_notes",
+        "update_company",
+        "link_person_to_project",
+        "unlink_person_from_project",
+        "get_person",
+        "get_company",
+        "list_global_people",
+        "list_global_companies",
+        "rebuild_refs_index",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Dynamic section generators
 # ---------------------------------------------------------------------------
+
 
 def _section_header(root: Path) -> str:
     today = date.today().isoformat()
@@ -164,7 +179,9 @@ def _section_root_structure(root: Path) -> str:
         return "\n".join(lines)
 
     lines.append(f"{root.name}/")
-    top_items = sorted(root.iterdir(), key=lambda p: (not p.name.startswith("_"), p.name))
+    top_items = sorted(
+        root.iterdir(), key=lambda p: (not p.name.startswith("_"), p.name)
+    )
     for i, item in enumerate(top_items):
         is_last_top = i == len(top_items) - 1
         connector = "└── " if is_last_top else "├── "
@@ -172,7 +189,9 @@ def _section_root_structure(root: Path) -> str:
         suffix = f"  {annotation}" if annotation else ""
         lines.append(f"{connector}{item.name}{suffix}")
         if item.is_dir():
-            sub_items = sorted(item.iterdir(), key=lambda p: (not p.name.startswith("_"), p.name))
+            sub_items = sorted(
+                item.iterdir(), key=lambda p: (not p.name.startswith("_"), p.name)
+            )
             for j, sub in enumerate(sub_items):
                 is_last_sub = j == len(sub_items) - 1
                 sub_connector = "    └── " if is_last_sub else "    ├── "
@@ -196,6 +215,7 @@ def _section_tool_inventory(mcp: "fastmcp.FastMCP") -> str:
     except RuntimeError:
         # Already inside an event loop — use a thread pool executor approach
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             tools = pool.submit(asyncio.run, mcp.list_tools()).result()
 
@@ -236,6 +256,7 @@ def _section_tool_inventory(mcp: "fastmcp.FastMCP") -> str:
 # ---------------------------------------------------------------------------
 # Public entry-point
 # ---------------------------------------------------------------------------
+
 
 def generate_guide(mcp: "fastmcp.FastMCP", root: Path) -> str:
     """Generate the full server guide as a UTF-8 markdown string.

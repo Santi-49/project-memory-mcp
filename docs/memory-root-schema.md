@@ -35,7 +35,7 @@ projects/{slug}/
 ├── _guide.md           ← Static folder structure table (human-editable)
 ├── _index.yaml         ← Auto-managed manifest for this directory
 ├── _meta.yaml          ← Project metadata (auto-populated, human-editable after creation)
-├── people.md           ← Key contacts and stakeholders
+├── people.md           ← Auto-managed linked people grouped by company
 ├── companies.md        ← Company relationships relevant to this project
 ├── decisions.md        ← Architecture/key decision log (append-only)
 ├── knowledge/
@@ -203,6 +203,28 @@ Keys are paths relative to the memory root. The three arrays capture distinct to
 
 Updated on every `write_file` and `append_to_file` call. Use `rebuild_refs_index` to reconstruct from scratch.
 
+### `_global/people/{slug}.md`
+
+Global canonical person profile. This is the source of truth for person metadata.
+
+```markdown
+# Full Name
+
+**Title:**
+**Company:** Other          # company slug/name or "Other"
+**Email:**
+**Phone:**
+**Description:**            # global description only
+
+## Notes
+_(manual notes empty)_      # editable via edit_person_notes tool
+
+## Projects
+- [[project-slug]]          # managed by link_person_to_project / unlink_person_from_project
+```
+
+Project-specific context should live in project files and can be discovered with search.
+
 ### Knowledge entry frontmatter
 
 Every file under `knowledge/` must start with a YAML frontmatter block:
@@ -242,7 +264,8 @@ Files prefixed with `_` are exempt from kebab-case enforcement so that internal 
 | `_meta.yaml` | Scaffolded by server | Yes — edit freely after creation |
 | `_status.md` | Scaffolded by server | Yes — update after every key event |
 | `_guide.md` | Scaffolded by server | Yes — static reference |
-| `people.md`, `companies.md` | Written by tools | Yes |
+| `people.md` | MCP server only (auto-managed from global person relationships) | No |
+| `companies.md` | Written by tools | Yes |
 | `decisions.md` | Append-only via tool | Yes (append only) |
 | `updates/*.md` | Append-only via tool | Yes (append only) |
 | `knowledge/*.md` | Written by tools | Yes |
