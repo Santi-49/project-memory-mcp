@@ -4,6 +4,40 @@ All rules are enforced at the `MemoryFS` layer in `src/filesystem.py` — not in
 
 ---
 
+## Indexable files
+
+All files in the memory-root filesystem (except `_index.yaml` manifests) are **automatically indexed** using TF-IDF or embedding-based search. They become immediately searchable and included in semantic queries.
+
+**Indexable directories:**
+
+| Directory | Indexable files | Purpose |
+|---|---|---|
+| `_global/people/` | All `.md` files | Team member profiles |
+| `_global/companies/` | All `.md` files | Partner/client information |
+| `projects/{slug}/knowledge/` | All `.md` files | Processed knowledge, summaries |
+| `projects/{slug}/correspondence/` | All `.md` files | Email, call, message digests |
+| `projects/{slug}/updates/` | All `.md` files | Chronological updates |
+| `projects/{slug}/` | `decisions.md` | Decision log |
+
+**Non-indexable files:**
+
+- `_index.yaml` — Auto-managed manifests, excluded from indexing
+- `_meta.yaml` — Metadata files, reference only
+- `_sync.yaml` — Sync configuration, excluded from indexing
+
+Files are indexed automatically when written and re-indexed when modified. The index stores:
+- **Term frequencies (TF)** for each file
+- **Modification time** to detect stale entries
+- **Indexed timestamp** for audit trail
+
+To ensure optimal indexability:
+1. Store content in markdown format (`.md`)
+2. Use meaningful file names (kebab-case, descriptive)
+3. Add descriptions via `_index.yaml` manifests (optional but recommended)
+4. Keep file content focused on a single topic
+
+---
+
 ## Path safety
 
 Every path argument is resolved against the memory root and checked to ensure it does not escape the root directory. A `ValueError` is raised if path traversal is attempted (e.g. `../../etc/passwd`).

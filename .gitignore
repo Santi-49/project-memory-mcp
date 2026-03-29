@@ -11,3 +11,7 @@ build/
 .env
 sim/*
 *.zip
+_rag_index.json
+_rag_index.json.tmp
+_rag_embeddings.json
+_rag_embeddings.json.tmp

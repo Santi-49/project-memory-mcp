@@ -291,7 +291,58 @@ No parameters. Use this when the refs index has drifted out of sync — for exam
 
 ---
 
-## Global entity tools
+## RAG Indexing
+
+All markdown files in the memory-root are automatically indexed for semantic search using TF-IDF 
+(or embeddings-based backend). The index is maintained automatically on every write operation.
+
+### Indexable files
+
+**Indexed automatically:**
+- All `.md` files in `_global/people/`, `_global/companies/`
+- All `.md` files in `projects/{slug}/knowledge/`, `projects/{slug}/correspondence/`, `projects/{slug}/updates/`
+- `projects/{slug}/decisions.md`, `projects/{slug}/_status.md`
+
+**Not indexed:**
+- `_index.yaml` — manifests (auto-managed)
+- `_meta.yaml`, `_sync.yaml` — configuration files
+- `_trash/*` — soft-deleted files
+- Any file starting with `.`
+
+### Index metadata
+
+The RAG system stores:
+
+```json
+{
+  "_rag_index.json": {
+    "version": 1,
+    "docs": {
+      "path/to/file.md": {
+        "tf": { "term": frequency, ... },
+        "mtime": 1774796858.33,
+        "indexed_at": "2026-03-29T18:49:17.855188+00:00"
+      }
+    },
+    "idf": { "term": score, ... }
+  }
+}
+```
+
+- **tf** — Term frequency (count / total tokens)
+- **mtime** — File modification time (Unix timestamp)
+- **indexed_at** — When file was indexed
+- **idf** — Inverse document frequency (global term importance)
+
+### Automatic re-indexing
+
+Files are re-indexed when:
+1. A new file is written via `write_file`
+2. A file is modified via `write_file` (detected by `mtime`)
+3. Content is appended via `append_to_file`
+4. Manifests are rebuilt via `update_manifest`
+
+See [`docs/indexable-files.md`](./indexable-files.md) for comprehensive guidance on ensuring optimal indexability.
 
 ### `create_person`
 

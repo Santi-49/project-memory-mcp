@@ -2841,3 +2841,582 @@ class TestMCPSyncStateTools:
     @pytest.fixture
     def mcp_server(self, tmp_path):
         return create_server(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# RAG engine unit tests
+# ---------------------------------------------------------------------------
+
+from rag import RAGEngine, tokenize, term_frequency, cosine_similarity
+
+_MTIME_SLEEP = 0.02  # seconds to sleep so mtime changes are detectable
+
+
+class TestTokenize:
+    def test_basic(self):
+        tokens = tokenize("Hello World test")
+        assert "hello" in tokens
+        assert "world" in tokens
+        assert "test" in tokens
+
+    def test_removes_stopwords(self):
+        tokens = tokenize("the and or but")
+        assert tokens == []
+
+    def test_removes_short_tokens(self):
+        tokens = tokenize("a ab abc")
+        assert tokens == ["abc"]
+
+    def test_numbers_kept(self):
+        tokens = tokenize("version 123 spec")
+        assert "123" in tokens
+        assert "version" in tokens
+
+    def test_empty(self):
+        assert tokenize("") == []
+
+
+class TestTermFrequency:
+    def test_proportional(self):
+        tf = term_frequency(["cat", "cat", "dog"])
+        assert abs(tf["cat"] - 2 / 3) < 1e-9
+        assert abs(tf["dog"] - 1 / 3) < 1e-9
+
+    def test_empty(self):
+        assert term_frequency([]) == {}
+
+
+class TestCosineSimilarity:
+    def test_identical(self):
+        v = {"a": 1.0, "b": 2.0}
+        assert abs(cosine_similarity(v, v) - 1.0) < 1e-9
+
+    def test_orthogonal(self):
+        v1 = {"a": 1.0}
+        v2 = {"b": 1.0}
+        assert cosine_similarity(v1, v2) == 0.0
+
+    def test_zero_vector(self):
+        assert cosine_similarity({}, {"a": 1.0}) == 0.0
+
+
+class TestRAGEngine:
+    def test_index_and_search(self, tmp_path):
+        f = tmp_path / "auth.md"
+        f.write_text("# Authentication\nOAuth JWT tokens secure endpoints", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        result = rag.index_file(f)
+        assert result == "indexed"
+        assert rag.indexed_count() == 1
+
+    def test_skip_unchanged(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("Some content here", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.index_file(f)
+        # Second call should skip
+        assert rag.index_file(f) == "skipped"
+
+    def test_reindex_on_modification(self, tmp_path):
+        import time
+
+        f = tmp_path / "note.md"
+        f.write_text("original content text", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.index_file(f)
+
+        time.sleep(_MTIME_SLEEP)
+        f.write_text("modified content text", encoding="utf-8")
+        # mtime changed → should re-index
+        assert rag.index_file(f) == "indexed"
+
+    def test_rebuild_counts(self, tmp_path):
+        (tmp_path / "a.md").write_text("alpha beta gamma delta", encoding="utf-8")
+        (tmp_path / "b.md").write_text("epsilon zeta eta theta", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        counts = rag.rebuild()
+        assert counts["indexed"] == 2
+        assert counts["skipped"] == 0
+
+        # Second rebuild — nothing changed → everything skipped
+        counts2 = rag.rebuild()
+        assert counts2["skipped"] == 2
+        assert counts2["indexed"] == 0
+
+    def test_rebuild_force(self, tmp_path):
+        (tmp_path / "a.md").write_text("alpha beta gamma delta", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.rebuild()
+        counts = rag.rebuild(force=True)
+        assert counts["indexed"] == 1
+
+    def test_search_returns_results(self, tmp_path):
+        (tmp_path / "auth.md").write_text(
+            "Authentication using JWT tokens for secure API access", encoding="utf-8"
+        )
+        (tmp_path / "deploy.md").write_text(
+            "Deployment pipeline builds Docker container images", encoding="utf-8"
+        )
+        rag = RAGEngine(tmp_path)
+        rag.rebuild()
+        results = rag.search("JWT token authentication")
+        assert len(results) >= 1
+        assert results[0]["path"] == "auth.md"
+        assert results[0]["score"] > 0
+
+    def test_search_project_slug_filter(self, tmp_path):
+        proj = tmp_path / "projects" / "my-proj"
+        proj.mkdir(parents=True)
+        (proj / "design.md").write_text("system design architecture patterns", encoding="utf-8")
+        (tmp_path / "other.md").write_text("system design architecture patterns", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.rebuild()
+        results = rag.search("system design", project_slug="my-proj")
+        assert all(r["path"].startswith("projects/my-proj/") for r in results)
+
+    def test_search_empty_index(self, tmp_path):
+        rag = RAGEngine(tmp_path)
+        results = rag.search("anything")
+        assert results == []
+
+    def test_search_top_k(self, tmp_path):
+        for i in range(10):
+            (tmp_path / f"doc{i}.md").write_text(
+                f"document about topic number {i} with detail", encoding="utf-8"
+            )
+        rag = RAGEngine(tmp_path)
+        rag.rebuild()
+        results = rag.search("document topic detail", top_k=3)
+        assert len(results) <= 3
+
+    def test_remove_file(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("important notes here", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.index_file(f)
+        assert rag.indexed_count() == 1
+        rag.remove_file(f)
+        assert rag.indexed_count() == 0
+
+    def test_get_stale_files(self, tmp_path):
+        import time
+
+        f = tmp_path / "note.md"
+        f.write_text("original text here", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.index_file(f)
+        assert rag.get_stale_files() == []
+
+        time.sleep(_MTIME_SLEEP)
+        f.write_text("modified text here now", encoding="utf-8")
+        stale = rag.get_stale_files()
+        assert len(stale) == 1
+        assert stale[0]["path"] == "note.md"
+
+    def test_rebuild_detects_stale(self, tmp_path):
+        import time
+
+        f = tmp_path / "note.md"
+        f.write_text("original text here", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.rebuild()
+
+        time.sleep(_MTIME_SLEEP)
+        f.write_text("externally modified text here", encoding="utf-8")
+        counts = rag.rebuild()
+        assert counts["stale"] == 1
+
+    def test_persistence(self, tmp_path):
+        f = tmp_path / "data.md"
+        f.write_text("persistent data content here", encoding="utf-8")
+        rag1 = RAGEngine(tmp_path)
+        rag1.index_file(f)
+
+        # New instance should load existing index
+        rag2 = RAGEngine(tmp_path)
+        assert rag2.indexed_count() == 1
+        results = rag2.search("persistent data")
+        assert len(results) == 1
+
+    def test_rebuild_removes_deleted_files(self, tmp_path):
+        f = tmp_path / "gone.md"
+        f.write_text("some content here text", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.rebuild()
+        assert rag.indexed_count() == 1
+        f.unlink()
+        rag.rebuild()
+        assert rag.indexed_count() == 0
+
+    def test_skips_trash(self, tmp_path):
+        trash = tmp_path / "_trash"
+        trash.mkdir()
+        (trash / "deleted.md").write_text("deleted content here", encoding="utf-8")
+        rag = RAGEngine(tmp_path)
+        rag.rebuild()
+        assert rag.indexed_count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — semantic_search and rebuild_rag_index MCP tools
+# ---------------------------------------------------------------------------
+
+
+class TestRagMCPTools:
+    def _call(self, server, tool_name: str, **kwargs):
+        import asyncio
+
+        return asyncio.run(server.call_tool(tool_name, kwargs))
+
+    def test_rebuild_rag_index_empty(self, mcp_server):
+        r = parse_result(self._call(mcp_server, "rebuild_rag_index"))
+        assert "error" not in r
+        assert "total_files" in r["result"]
+
+    def test_rebuild_rag_index_after_write(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="rag-proj", name="RAG Project")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/rag-proj/design.md",
+            content="# Design\n\nThe system uses event-driven architecture.",
+        )
+        r = parse_result(self._call(mcp_server, "rebuild_rag_index"))
+        assert "error" not in r
+        assert r["result"]["index_size"] >= 1
+
+    def test_semantic_search_finds_written_file(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="search-proj", name="Search")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/search-proj/auth.md",
+            content="# Authentication\n\nWe use OAuth2 JWT tokens for API access.",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "semantic_search",
+                query="JWT OAuth authentication tokens",
+                project_slug="search-proj",
+            )
+        )
+        assert "error" not in r
+        paths = [item["path"] for item in r["result"]]
+        assert any("auth.md" in p for p in paths)
+
+    def test_semantic_search_scoped_to_project(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="proj-a", name="Project A")
+        self._call(mcp_server, "create_project", slug="proj-b", name="Project B")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/proj-a/notes.md",
+            content="# Notes\n\nDatabase schema migration strategy",
+        )
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/proj-b/notes.md",
+            content="# Notes\n\nDatabase schema migration strategy",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "semantic_search",
+                query="database schema migration",
+                project_slug="proj-a",
+            )
+        )
+        assert "error" not in r
+        for item in r["result"]:
+            assert item["path"].startswith("projects/proj-a/")
+
+    def test_semantic_search_empty_index_warning(self, mcp_server):
+        r = parse_result(
+            self._call(mcp_server, "semantic_search", query="anything at all")
+        )
+        assert "error" not in r
+        assert any("rebuild_rag_index" in w for w in r["warnings"])
+
+    def test_rebuild_rag_index_project_slug(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="scoped-proj", name="Scoped")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/scoped-proj/readme.md",
+            content="# README\n\nScoped project documentation here.",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "rebuild_rag_index",
+                project_slug="scoped-proj",
+                force=True,
+            )
+        )
+        assert "error" not in r
+        assert r["result"]["total_files"] >= 1
+
+    def test_rebuild_rag_index_force(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="force-proj", name="Force")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/force-proj/doc.md",
+            content="# Doc\n\nContent for force reindex testing",
+        )
+        self._call(mcp_server, "rebuild_rag_index")
+        r = parse_result(self._call(mcp_server, "rebuild_rag_index", force=True))
+        assert "error" not in r
+        assert r["result"]["indexed"] >= 1
+
+    @pytest.fixture
+    def mcp_server(self, tmp_path):
+        return create_server(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# RAG backend selection and factory tests
+# ---------------------------------------------------------------------------
+
+from unittest.mock import MagicMock, patch
+
+from rag import (
+    RAGEngine,
+    RAG_BACKEND_TFIDF,
+    RAG_BACKEND_EMBEDDINGS,
+    DEFAULT_EMBEDDING_MODEL,
+    _TFIDFBackend,
+    _EmbeddingsBackend,
+)
+
+
+class TestRAGEngineBackendSelection:
+    def test_default_is_tfidf(self, tmp_path):
+        rag = RAGEngine(tmp_path)
+        assert rag.backend == RAG_BACKEND_TFIDF
+        assert isinstance(rag._impl, _TFIDFBackend)
+
+    def test_explicit_tfidf(self, tmp_path):
+        rag = RAGEngine(tmp_path, backend=RAG_BACKEND_TFIDF)
+        assert rag.backend == RAG_BACKEND_TFIDF
+        assert isinstance(rag._impl, _TFIDFBackend)
+
+    def test_embeddings_backend_type(self, tmp_path):
+        rag = RAGEngine(tmp_path, backend=RAG_BACKEND_EMBEDDINGS)
+        assert rag.backend == RAG_BACKEND_EMBEDDINGS
+        assert isinstance(rag._impl, _EmbeddingsBackend)
+
+    def test_invalid_backend_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="Unknown RAG backend"):
+            RAGEngine(tmp_path, backend="unknown-backend")
+
+    def test_embedding_model_propagated(self, tmp_path):
+        model_name = "paraphrase-MiniLM-L3-v2"
+        rag = RAGEngine(tmp_path, backend=RAG_BACKEND_EMBEDDINGS, embedding_model=model_name)
+        assert rag._impl.model_name == model_name
+
+    def test_tfidf_uses_separate_index_file(self, tmp_path):
+        rag = RAGEngine(tmp_path, backend=RAG_BACKEND_TFIDF)
+        (tmp_path / "doc.md").write_text("some content here text", encoding="utf-8")
+        rag.rebuild()
+        assert (tmp_path / "_rag_index.json").exists()
+        assert not (tmp_path / "_rag_embeddings.json").exists()
+
+
+class TestEmbeddingsBackendWithMock:
+    """Test _EmbeddingsBackend using a mocked sentence-transformers model."""
+
+    @pytest.fixture(autouse=True)
+    def require_numpy(self):
+        pytest.importorskip("numpy", reason="numpy required for embeddings backend tests")
+
+    def _make_mock_model(self, dim: int = 8):
+        """Return a mock SentenceTransformer that encodes text to a fixed-dim vector."""
+        import numpy as np
+
+        mock = MagicMock()
+        # Each call to encode returns a different vector seeded by the text hash
+        def encode_side_effect(text, convert_to_numpy=True):
+            rng = np.random.RandomState(hash(text) % (2**31))
+            vec = rng.randn(dim).astype(float)
+            return vec / (np.linalg.norm(vec) + 1e-10)
+
+        mock.encode.side_effect = encode_side_effect
+        return mock
+
+    def _patch_model(self, backend: _EmbeddingsBackend, mock_model):
+        """Inject a mock model into an already-constructed backend."""
+        backend._model = mock_model
+
+    def test_index_file_indexed(self, tmp_path):
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        f = tmp_path / "auth.md"
+        f.write_text("JWT authentication tokens OAuth", encoding="utf-8")
+        assert backend.index_file(f) == "indexed"
+        assert backend.indexed_count() == 1
+
+    def test_index_file_skipped_unchanged(self, tmp_path):
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        f = tmp_path / "note.md"
+        f.write_text("Some content here", encoding="utf-8")
+        backend.index_file(f)
+        assert backend.index_file(f) == "skipped"
+
+    def test_search_returns_results(self, tmp_path):
+        import numpy as np
+
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+
+        (tmp_path / "auth.md").write_text("JWT tokens authentication", encoding="utf-8")
+        (tmp_path / "deploy.md").write_text("Docker containers deployment pipeline", encoding="utf-8")
+        backend.rebuild()
+
+        results = backend.search("authentication security tokens")
+        assert isinstance(results, list)
+        # All results have required keys
+        for r in results:
+            assert "path" in r
+            assert "score" in r
+            assert "indexed_at" in r
+
+    def test_search_project_slug_filter(self, tmp_path):
+        proj = tmp_path / "projects" / "my-proj"
+        proj.mkdir(parents=True)
+        (proj / "design.md").write_text("system design architecture", encoding="utf-8")
+        (tmp_path / "other.md").write_text("system design architecture", encoding="utf-8")
+
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        backend.rebuild()
+
+        results = backend.search("system design", project_slug="my-proj")
+        assert all(r["path"].startswith("projects/my-proj/") for r in results)
+
+    def test_rebuild_counts(self, tmp_path):
+        (tmp_path / "a.md").write_text("alpha beta gamma", encoding="utf-8")
+        (tmp_path / "b.md").write_text("epsilon zeta eta", encoding="utf-8")
+
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        counts = backend.rebuild()
+        assert counts["indexed"] == 2
+
+        counts2 = backend.rebuild()
+        assert counts2["skipped"] == 2
+
+    def test_persistence_and_reload(self, tmp_path):
+        f = tmp_path / "data.md"
+        f.write_text("persistent data content here", encoding="utf-8")
+        mock_model = self._make_mock_model()
+
+        backend1 = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend1, mock_model)
+        backend1.index_file(f)
+        assert backend1.indexed_count() == 1
+
+        # Second backend should load from disk
+        backend2 = _EmbeddingsBackend(tmp_path)
+        assert backend2.indexed_count() == 1
+
+    def test_model_change_clears_index(self, tmp_path):
+        f = tmp_path / "doc.md"
+        f.write_text("some content here", encoding="utf-8")
+
+        backend1 = _EmbeddingsBackend(tmp_path, model_name="model-a")
+        self._patch_model(backend1, self._make_mock_model())
+        backend1.index_file(f)
+        assert backend1.indexed_count() == 1
+
+        # Different model name → index should be discarded
+        backend2 = _EmbeddingsBackend(tmp_path, model_name="model-b")
+        assert backend2.indexed_count() == 0
+
+    def test_remove_file(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("important notes here", encoding="utf-8")
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        backend.index_file(f)
+        assert backend.indexed_count() == 1
+        backend.remove_file(f)
+        assert backend.indexed_count() == 0
+
+    def test_get_stale_files(self, tmp_path):
+        import time
+
+        f = tmp_path / "note.md"
+        f.write_text("original text here", encoding="utf-8")
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        backend.index_file(f)
+        assert backend.get_stale_files() == []
+
+        time.sleep(_MTIME_SLEEP)
+        f.write_text("modified text here", encoding="utf-8")
+        stale = backend.get_stale_files()
+        assert len(stale) == 1
+
+    def test_missing_package_raises_import_error(self, tmp_path):
+        """_EmbeddingsBackend raises ImportError when sentence-transformers is absent."""
+        # Only meaningful when sentence-transformers is NOT installed
+        try:
+            import sentence_transformers  # noqa: F401
+            pytest.skip("sentence-transformers is installed; test requires it to be absent")
+        except ImportError:
+            pass
+        backend = _EmbeddingsBackend(tmp_path)
+        with pytest.raises(ImportError, match="sentence-transformers"):
+            backend._get_model()
+
+
+class TestCreateServerRAGParams:
+    """Test that create_server propagates rag_backend / embedding_model correctly."""
+
+    def _call(self, server, tool_name: str, **kwargs):
+        import asyncio
+
+        return asyncio.run(server.call_tool(tool_name, kwargs))
+
+    def test_default_backend_is_tfidf(self, tmp_path):
+        server = create_server(tmp_path)
+        r = parse_result(self._call(server, "rebuild_rag_index"))
+        assert "error" not in r
+        assert r["result"]["backend"] == RAG_BACKEND_TFIDF
+
+    def test_tfidf_backend_explicit(self, tmp_path):
+        server = create_server(tmp_path, rag_backend=RAG_BACKEND_TFIDF)
+        r = parse_result(self._call(server, "rebuild_rag_index"))
+        assert "error" not in r
+        assert r["result"]["backend"] == RAG_BACKEND_TFIDF
+
+    def test_invalid_backend_raises_at_server_creation(self, tmp_path):
+        with pytest.raises(ValueError, match="Unknown RAG backend"):
+            create_server(tmp_path, rag_backend="bad-backend")
+
+    def test_semantic_search_reports_backend(self, tmp_path):
+        server = create_server(tmp_path, rag_backend=RAG_BACKEND_TFIDF)
+        r = parse_result(self._call(server, "semantic_search", query="test query"))
+        assert "error" not in r
+        assert r["backend"] == RAG_BACKEND_TFIDF
+
+    def test_embeddings_backend_uses_separate_index(self, tmp_path):
+        """Embeddings backend writes _rag_embeddings.json, not _rag_index.json."""
+        pytest.importorskip("numpy", reason="numpy required")
+        sentence_transformers = pytest.importorskip(
+            "sentence_transformers", reason="sentence-transformers required"
+        )
+        server = create_server(tmp_path, rag_backend=RAG_BACKEND_EMBEDDINGS)
+        self._call(server, "create_project", slug="emb-proj", name="Emb")
+        self._call(
+            server,
+            "write_file",
+            path="projects/emb-proj/doc.md",
+            content="# Doc\n\nEmbedding backend test content.",
+        )
+        assert (tmp_path / "_rag_embeddings.json").exists()
+        assert not (tmp_path / "_rag_index.json").exists()

@@ -30,6 +30,7 @@ from filesystem import (
     to_kebab_case,
     validate_knowledge_frontmatter,
 )
+from rag import RAGEngine, RAG_BACKEND_TFIDF, RAG_BACKEND_EMBEDDINGS, DEFAULT_EMBEDDING_MODEL
 from guide import (
     generate_guide,
     generate_m365_guide,
@@ -82,10 +83,15 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
 # ---------------------------------------------------------------------------
 
 
-def create_server(root: Path) -> fastmcp.FastMCP:
+def create_server(
+    root: Path,
+    rag_backend: str = RAG_BACKEND_TFIDF,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+) -> fastmcp.FastMCP:
     root = root.resolve()  # ensure absolute so Path.relative_to() never fails
     fs = MemoryFS(root)
     fs.initialise()
+    rag = RAGEngine(root, backend=rag_backend, embedding_model=embedding_model)
 
     mcp = fastmcp.FastMCP(
         name="project-memory",
@@ -266,6 +272,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             warnings = fs.write_file(
                 path, content, description=description, read_when=read_when
             )
+            rag.index_file(fs._safe_path(path))
             return {"result": f"Written: {path}", "warnings": warnings}
         except ValueError as e:
             return {"error": str(e), "warnings": []}
@@ -280,6 +287,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         """
         try:
             warnings = fs.append_file(path, content)
+            rag.index_file(fs._safe_path(path))
             return {"result": f"Appended to: {path}", "warnings": warnings}
         except ValueError as e:
             return {"error": str(e), "warnings": []}
@@ -498,6 +506,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             warnings = fs.write_file(
                 path, full_content, description=description, read_when=read_when
             )
+            rag.index_file(fs._safe_path(path))
             return {"result": f"Knowledge entry created: {path}", "warnings": warnings}
         except ValueError as e:
             return {"error": str(e), "warnings": []}
@@ -968,6 +977,92 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         except Exception as e:
             return {"error": str(e), "warnings": []}
 
+    # -----------------------------------------------------------------------
+    # RAG / semantic-search tools
+    # -----------------------------------------------------------------------
+
+    @mcp.tool
+    def semantic_search(
+        query: str,
+        project_slug: Optional[str] = None,
+        top_k: int = 10,
+    ) -> dict[str, Any]:
+        """Search indexed files by semantic meaning.
+
+        Uses the configured RAG backend (``tfidf`` or ``embeddings``) to rank
+        results by relevance.  Returns up to *top_k* results ordered by score.
+        Each result contains ``path``, ``score`` (0–1), and ``indexed_at``
+        timestamp.
+
+        Use *project_slug* to scope the search to a single project.
+
+        If the index is empty or results are unexpected, run
+        ``rebuild_rag_index`` first to (re-)index all files.
+        """
+        try:
+            # Auto-detect and re-index externally modified files before searching
+            stale = rag.get_stale_files()
+            reindexed = []
+            for entry in stale:
+                p = root / entry["path"]
+                result = rag.index_file(p)
+                if result == "indexed":
+                    reindexed.append(entry["path"])
+
+            results = rag.search(query, project_slug=project_slug, top_k=top_k)
+            warnings: list[str] = []
+            if reindexed:
+                warnings.append(
+                    f"Re-indexed {len(reindexed)} externally modified file(s) before search: "
+                    + ", ".join(reindexed)
+                )
+            if not results:
+                warnings.append(
+                    "No results found. If files have not been indexed yet, "
+                    "call rebuild_rag_index first."
+                )
+            return {
+                "result": results,
+                "backend": rag.backend,
+                "warnings": warnings,
+            }
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def rebuild_rag_index(
+        project_slug: Optional[str] = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Build or refresh the local RAG index used by ``semantic_search``.
+
+        * By default only re-indexes files whose on-disk content has changed
+          since the last run (fast incremental update).
+        * Set *force* to ``true`` to re-index every file unconditionally.
+        * Optionally scope to a single project with *project_slug*.
+
+        The active backend (``tfidf`` or ``embeddings``) is reported in the
+        result.  Returns counts of ``indexed``, ``skipped``, and ``stale``
+        files.  Stale files are those that were externally modified (outside
+        the MCP server) and have now been re-indexed.
+        """
+        try:
+            counts = rag.rebuild(project_slug=project_slug, force=force)
+            total = counts["indexed"] + counts["skipped"] + counts["stale"]
+            return {
+                "result": {
+                    "backend": rag.backend,
+                    "total_files": total,
+                    "indexed": counts["indexed"],
+                    "re_indexed_stale": counts["stale"],
+                    "skipped_unchanged": counts["skipped"],
+                    "index_size": rag.indexed_count(),
+                },
+                "warnings": [],
+            }
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
     @mcp.tool
     def rebuild_refs_index() -> dict[str, Any]:
         """Rebuild _refs-index.json by scanning all .md files from scratch."""
@@ -1243,9 +1338,32 @@ Examples:
         default=8000,
         help="Port for HTTP transport (default: 8000)",
     )
+    parser.add_argument(
+        "--rag-backend",
+        choices=[RAG_BACKEND_TFIDF, RAG_BACKEND_EMBEDDINGS],
+        default=RAG_BACKEND_TFIDF,
+        dest="rag_backend",
+        help=(
+            "RAG retrieval backend (default: tfidf). "
+            "'embeddings' requires: pip install sentence-transformers"
+        ),
+    )
+    parser.add_argument(
+        "--embedding-model",
+        default=DEFAULT_EMBEDDING_MODEL,
+        dest="embedding_model",
+        help=(
+            "Sentence-Transformers model name used with --rag-backend=embeddings "
+            f"(default: {DEFAULT_EMBEDDING_MODEL})"
+        ),
+    )
     args = parser.parse_args()
 
-    server = create_server(args.root)
+    server = create_server(
+        args.root,
+        rag_backend=args.rag_backend,
+        embedding_model=args.embedding_model,
+    )
 
     if args.transport == "http":
         auth_token = os.environ.get("AUTH_TOKEN", "").strip()
