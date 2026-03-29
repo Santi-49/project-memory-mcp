@@ -52,6 +52,7 @@ _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _today() -> str:
     return date.today().isoformat()
 
@@ -95,7 +96,11 @@ def is_append_only(path: Path) -> bool:
     parts = path.parts
     if path.name.lower() == "decisions.md":
         return True
-    if len(parts) >= 2 and parts[-2].lower() == "updates" and path.suffix.lower() == ".md":
+    if (
+        len(parts) >= 2
+        and parts[-2].lower() == "updates"
+        and path.suffix.lower() == ".md"
+    ):
         return True
     return False
 
@@ -122,7 +127,9 @@ def validate_knowledge_frontmatter(content: str) -> tuple[bool, list[str]]:
     """Validate that knowledge entry starts with valid YAML frontmatter."""
     errors: list[str] = []
     if not content.startswith("---"):
-        errors.append("Knowledge entries must start with a YAML frontmatter block (---)")
+        errors.append(
+            "Knowledge entries must start with a YAML frontmatter block (---)"
+        )
         return False, errors
 
     parts = content.split("---", 2)
@@ -152,6 +159,7 @@ def validate_knowledge_frontmatter(content: str) -> tuple[bool, list[str]]:
 # MemoryFS
 # ---------------------------------------------------------------------------
 
+
 class MemoryFS:
     """All filesystem operations for the memory root."""
 
@@ -169,7 +177,9 @@ class MemoryFS:
             resolved = p.resolve()
         else:
             resolved = (self.root / p).resolve()
-        if not str(resolved).startswith(str(self.root)):
+
+        # Windows case-insensitivity: compare lower-case strings
+        if not str(resolved).lower().startswith(str(self.root).lower()):
             raise ValueError(f"Path {rel_or_abs!r} escapes the memory root")
         return resolved
 
@@ -188,16 +198,12 @@ class MemoryFS:
         # _projects-index.json
         pi_path = self.root / "_projects-index.json"
         if not pi_path.exists():
-            pi_path.write_text(
-                json.dumps({"projects": []}, indent=2), encoding="utf-8"
-            )
+            pi_path.write_text(json.dumps({"projects": []}, indent=2), encoding="utf-8")
 
         # _refs-index.json
         ri_path = self.root / "_refs-index.json"
         if not ri_path.exists():
-            ri_path.write_text(
-                json.dumps({"entries": {}}, indent=2), encoding="utf-8"
-            )
+            ri_path.write_text(json.dumps({"entries": {}}, indent=2), encoding="utf-8")
 
         # root _index.yaml
         root_manifest = self.root / "_index.yaml"
@@ -257,9 +263,7 @@ class MemoryFS:
 
     def save_projects_index(self, index: ProjectsIndex) -> None:
         path = self.root / "_projects-index.json"
-        path.write_text(
-            json.dumps(index.model_dump(), indent=2), encoding="utf-8"
-        )
+        path.write_text(json.dumps(index.model_dump(), indent=2), encoding="utf-8")
 
     def load_refs_index(self) -> RefsIndex:
         path = self.root / "_refs-index.json"
@@ -270,17 +274,13 @@ class MemoryFS:
 
     def save_refs_index(self, index: RefsIndex) -> None:
         path = self.root / "_refs-index.json"
-        path.write_text(
-            json.dumps(index.model_dump(), indent=2), encoding="utf-8"
-        )
+        path.write_text(json.dumps(index.model_dump(), indent=2), encoding="utf-8")
 
     def update_refs_for_file(self, rel_path: str, content: str) -> None:
         """Parse content for refs/tags/links and update _refs-index.json."""
         parsed = parse_refs(content)
         refs_index = self.load_refs_index()
-        refs_index.entries[rel_path] = RefsIndexEntry(
-            path=rel_path, **parsed
-        )
+        refs_index.entries[rel_path] = RefsIndexEntry(path=rel_path, **parsed)
         self.save_refs_index(refs_index)
 
     # ------------------------------------------------------------------
@@ -319,8 +319,10 @@ class MemoryFS:
 
     def add_manifest_entry(self, folder: Path, entry: ManifestEntry) -> None:
         manifest = self.load_manifest(folder)
-        # Replace if entry with same name already exists
-        manifest.files = [f for f in manifest.files if f.name != entry.name]
+        # Replace if entry with same name (case-insensitive on Windows if needed, but we keep the object casing)
+        manifest.files = [
+            f for f in manifest.files if f.name.lower() != entry.name.lower()
+        ]
         manifest.files.append(entry)
         manifest.last_updated = _today()
         self.save_manifest(folder, manifest)
@@ -347,26 +349,33 @@ class MemoryFS:
         """Scan folder, add missing entries, remove entries for deleted files."""
         manifest = self.load_manifest(folder)
 
-        # updates/ folders use a summary-only convention — but we still scan files
-        if is_updates_folder(folder):
-            if not manifest.description:
-                manifest.description = "Chronological update log. Read the file directly for recent entries."
+        # Map existing descriptions/metadata by case-insensitive filename
+        existing_meta = {e.name.lower(): e for e in manifest.files}
 
+        # Standard description for updates folders if missing
+        if is_updates_folder(folder) and not manifest.description:
+            manifest.description = (
+                "Chronological update log. Read the file directly for recent entries."
+            )
 
-        existing_names = {e.name for e in manifest.files}
-
-        # Add missing entries
+        # Re-scan folder and build fresh list
+        new_files: list[ManifestEntry] = []
         for p in sorted(folder.iterdir()):
-            if p.is_file() and p.suffix.lower() in (".md", ".yaml", ".json") and not p.name.startswith("_"):
-                if p.name not in existing_names:
-                    manifest.files.append(ManifestEntry(name=p.name))
+            # Only index specific extensions, skip files starting with _ (including _index.yaml)
+            if (
+                p.is_file()
+                and p.suffix.lower() in (".md", ".yaml", ".json")
+                and not p.name.startswith("_")
+            ):
+                name_low = p.name.lower()
+                if name_low in existing_meta:
+                    # Keep existing entry (preserves custom descriptions)
+                    new_files.append(existing_meta[name_low])
+                else:
+                    # New entry
+                    new_files.append(ManifestEntry(name=p.name))
 
-        # Remove entries for deleted files
-        manifest.files = [
-            e for e in manifest.files
-            if (folder / e.name).exists()
-        ]
-
+        manifest.files = new_files
         manifest.last_updated = _today()
         manifest.stale = False
         self.save_manifest(folder, manifest)
@@ -507,7 +516,7 @@ class MemoryFS:
             correspondence_manifest.files.append(
                 ManifestEntry(
                     name=fname,
-                    description=f"Chronological {fname.replace('.md', '').replace('-', ' ')} log for {meta.name}."
+                    description=f"Chronological {fname.replace('.md', '').replace('-', ' ')} log for {meta.name}.",
                 )
             )
         correspondence_manifest.last_updated = today
@@ -552,9 +561,7 @@ class MemoryFS:
 
         # Update root _index.yaml
         root_manifest = self._load_root_manifest()
-        root_manifest.projects = [
-            p for p in root_manifest.projects if p.slug != slug
-        ]
+        root_manifest.projects = [p for p in root_manifest.projects if p.slug != slug]
         root_manifest.projects.append(
             RootManifestEntry(
                 slug=slug,
@@ -605,19 +612,23 @@ class MemoryFS:
             raise FileNotFoundError(f"_meta.yaml missing for project {slug!r}")
 
         raw = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
-        
+
         if name is not None:
             raw["name"] = name
         if status is not None:
             raw["status"] = ProjectStatus(status).value
         if type is not None:
             raw["type"] = ProjectType(type).value
-        
+
         if meta is not None:
-            if "company" in meta: raw["company"] = meta["company"]
-            if "owner" in meta: raw["owner"] = meta["owner"]
-            if "team" in meta: raw["team"] = meta["team"]
-            if "tags" in meta: raw["tags"] = meta["tags"]
+            if "company" in meta:
+                raw["company"] = meta["company"]
+            if "owner" in meta:
+                raw["owner"] = meta["owner"]
+            if "team" in meta:
+                raw["team"] = meta["team"]
+            if "tags" in meta:
+                raw["tags"] = meta["tags"]
 
         raw["updated"] = _today()
 
@@ -627,9 +638,12 @@ class MemoryFS:
         root_manifest = self._load_root_manifest()
         for p in root_manifest.projects:
             if p.slug == slug:
-                if name is not None: p.name = name
-                if status is not None: p.status = raw["status"]
-                if type is not None: p.type = raw["type"]
+                if name is not None:
+                    p.name = name
+                if status is not None:
+                    p.status = raw["status"]
+                if type is not None:
+                    p.type = raw["type"]
                 p.updated = raw["updated"]
                 break
         root_manifest.last_updated = _today()
@@ -638,10 +652,14 @@ class MemoryFS:
         pi = self.load_projects_index()
         for p in pi.projects:
             if p.slug == slug:
-                if name is not None: p.name = name
-                if status is not None: p.status = raw["status"]
-                if type is not None: p.type = raw["type"]
-                if "tags" in raw: p.tags = raw.get("tags", [])
+                if name is not None:
+                    p.name = name
+                if status is not None:
+                    p.status = raw["status"]
+                if type is not None:
+                    p.type = raw["type"]
+                if "tags" in raw:
+                    p.tags = raw.get("tags", [])
                 p.updated = raw["updated"]
                 break
         self.save_projects_index(pi)
@@ -738,7 +756,11 @@ class MemoryFS:
 
         # Update manifest
         folder = abs_path.parent
-        if not is_manifest(abs_path) and abs_path.suffix.lower() in (".md", ".yaml", ".json"):
+        if not is_manifest(abs_path) and abs_path.suffix.lower() in (
+            ".md",
+            ".yaml",
+            ".json",
+        ):
             entry = ManifestEntry(
                 name=abs_path.name,
                 description=description,
@@ -772,25 +794,22 @@ class MemoryFS:
         parsed = parse_refs(content)
         warnings.extend(self.warn_unresolved_refs(parsed["refs"]))
 
-        # For updates/ folders: update last_entry_date instead of marking stale
+        # Force a manifest rebuild for this folder to ensure new file is indexed
+        self.rebuild_manifest(abs_path.parent)
+
+        # Defensive fallback: guarantee the appended file is present in manifest.
+        # This protects against rare manifest desync scenarios on append-only flows.
+        manifest = self.load_manifest(abs_path.parent)
+        if not any(f.name.lower() == abs_path.name.lower() for f in manifest.files):
+            manifest.files.append(ManifestEntry(name=abs_path.name))
+            manifest.last_updated = _today()
+            self.save_manifest(abs_path.parent, manifest)
+
+        # For updates/ folders: ensure last_entry_date is set to today
         if is_updates_folder(abs_path.parent):
             manifest = self.load_manifest(abs_path.parent)
             manifest.last_entry_date = _today()
-            manifest.last_updated = _today()
-            # Also ensure file is in manifest
-            if not any(f.name == abs_path.name for f in manifest.files):
-                manifest.files.append(ManifestEntry(name=abs_path.name))
             self.save_manifest(abs_path.parent, manifest)
-        else:
-            # Mark manifest stale for other append-only files (e.g. decisions.md)
-            # And ensure file is in manifest if it's a new or existing append-only file
-            manifest = self.load_manifest(abs_path.parent)
-            if not any(f.name == abs_path.name for f in manifest.files):
-                manifest.files.append(ManifestEntry(name=abs_path.name))
-                manifest.last_updated = _today()
-                self.save_manifest(abs_path.parent, manifest)
-            else:
-                self.mark_manifest_stale(abs_path.parent)
 
         return warnings
 
@@ -876,7 +895,9 @@ class MemoryFS:
             people_path = self.root / "_global" / "people" / f"{ref}.md"
             company_path = self.root / "_global" / "companies" / f"{ref}.md"
             if not people_path.exists() and not company_path.exists():
-                warnings.append(f"Unresolved ref: @{ref} (not found in _global/people or _global/companies)")
+                warnings.append(
+                    f"Unresolved ref: @{ref} (not found in _global/people or _global/companies)"
+                )
         return warnings
 
     def resolve_ref(self, slug: str) -> tuple[Path, str]:
@@ -885,18 +906,16 @@ class MemoryFS:
             p = self.root / "_global" / sub / f"{slug}.md"
             if p.exists():
                 return p, p.read_text(encoding="utf-8")
-        raise FileNotFoundError(f"Ref @{slug} not found in _global/people or _global/companies")
+        raise FileNotFoundError(
+            f"Ref @{slug} not found in _global/people or _global/companies"
+        )
 
     def get_refs_for(self, ref: str) -> list[str]:
         """Return list of file paths that mention @ref, #tag, or [[link]]."""
         refs_index = self.load_refs_index()
         results: list[str] = []
         for rel_path, entry in refs_index.entries.items():
-            if (
-                ref in entry.refs
-                or ref in entry.tags
-                or ref in entry.links
-            ):
+            if ref in entry.refs or ref in entry.tags or ref in entry.links:
                 results.append(rel_path)
         return results
 
@@ -922,7 +941,9 @@ class MemoryFS:
             for field_name, field_value in extra_fields.items():
                 # Replace "**FieldName:** " (trailing space before newline) with value inline
                 placeholder = f"**{field_name}:** "
-                content = content.replace(placeholder, f"**{field_name}:** {field_value}", 1)
+                content = content.replace(
+                    placeholder, f"**{field_name}:** {field_value}", 1
+                )
 
         path.write_text(content, encoding="utf-8")
         self.add_manifest_entry(
@@ -952,7 +973,9 @@ class MemoryFS:
         if extra_fields:
             for field_name, field_value in extra_fields.items():
                 placeholder = f"**{field_name}:** "
-                content = content.replace(placeholder, f"**{field_name}:** {field_value}", 1)
+                content = content.replace(
+                    placeholder, f"**{field_name}:** {field_value}", 1
+                )
         path.write_text(content, encoding="utf-8")
         self.add_manifest_entry(
             folder,
@@ -977,22 +1000,36 @@ class MemoryFS:
             raise FileNotFoundError(f"Person {slug!r} not found")
 
         content = path.read_text(encoding="utf-8")
-        
+
         if name is not None:
-            content = re.sub(r"^# .*", f"# {name}", content, count=1, flags=re.MULTILINE)
+            content = re.sub(
+                r"^# .*", f"# {name}", content, count=1, flags=re.MULTILINE
+            )
 
         if extra_fields:
             for field_name, field_value in extra_fields.items():
                 placeholder_pattern = rf"^\*\*{field_name}:\*\*.*$"
                 new_line = f"**{field_name}:** {field_value}"
-                
+
                 if re.search(placeholder_pattern, content, flags=re.MULTILINE):
-                    content = re.sub(placeholder_pattern, new_line, content, count=1, flags=re.MULTILINE)
+                    content = re.sub(
+                        placeholder_pattern,
+                        new_line,
+                        content,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
                 else:
-                    content = re.sub(r"^(# .*)$", r"\1\n\n" + new_line, content, count=1, flags=re.MULTILINE)
+                    content = re.sub(
+                        r"^(# .*)$",
+                        r"\1\n\n" + new_line,
+                        content,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
 
         path.write_text(content, encoding="utf-8")
-        
+
         if description is not None:
             self.update_manifest_entry(folder, f"{slug}.md", description=description)
 
@@ -1011,22 +1048,36 @@ class MemoryFS:
             raise FileNotFoundError(f"Company {slug!r} not found")
 
         content = path.read_text(encoding="utf-8")
-        
+
         if name is not None:
-            content = re.sub(r"^# .*", f"# {name}", content, count=1, flags=re.MULTILINE)
+            content = re.sub(
+                r"^# .*", f"# {name}", content, count=1, flags=re.MULTILINE
+            )
 
         if extra_fields:
             for field_name, field_value in extra_fields.items():
                 placeholder_pattern = rf"^\*\*{field_name}:\*\*.*$"
                 new_line = f"**{field_name}:** {field_value}"
-                
+
                 if re.search(placeholder_pattern, content, flags=re.MULTILINE):
-                    content = re.sub(placeholder_pattern, new_line, content, count=1, flags=re.MULTILINE)
+                    content = re.sub(
+                        placeholder_pattern,
+                        new_line,
+                        content,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
                 else:
-                    content = re.sub(r"^(# .*)$", r"\1\n\n" + new_line, content, count=1, flags=re.MULTILINE)
+                    content = re.sub(
+                        r"^(# .*)$",
+                        r"\1\n\n" + new_line,
+                        content,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
 
         path.write_text(content, encoding="utf-8")
-        
+
         if description is not None:
             self.update_manifest_entry(folder, f"{slug}.md", description=description)
 

@@ -25,7 +25,6 @@ from models import (
 )
 from server import create_server
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -243,14 +242,20 @@ class TestWriteFile:
 
     def test_warns_unresolved_ref(self, fs):
         fs.scaffold_project("test-proj", make_meta())
-        warnings = fs.write_file("projects/test-proj/notes/note.md", "See @unknown-person")
+        warnings = fs.write_file(
+            "projects/test-proj/notes/note.md", "See @unknown-person"
+        )
         assert any("unknown-person" in w for w in warnings)
 
     def test_updates_manifest(self, fs):
         fs.scaffold_project("test-proj", make_meta())
-        fs.write_file("projects/test-proj/notes/note.md", "# Note", description="My note")
+        fs.write_file(
+            "projects/test-proj/notes/note.md", "# Note", description="My note"
+        )
         manifest = fs.load_manifest(fs.root / "projects" / "test-proj" / "notes")
-        assert any(e.name == "note.md" and e.description == "My note" for e in manifest.files)
+        assert any(
+            e.name == "note.md" and e.description == "My note" for e in manifest.files
+        )
 
     def test_updates_refs_index(self, fs):
         fs.scaffold_project("test-proj", make_meta())
@@ -283,6 +288,14 @@ class TestAppendFile:
         fs.append_file("projects/test-proj/decisions.md", "\n## Decision")
         manifest = fs.load_manifest(fs.root / "projects" / "test-proj")
         assert manifest.stale
+
+    def test_updates_append_new_file_is_indexed(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.append_file(
+            "projects/test-proj/updates/005-final-test.md", "\n## Final update"
+        )
+        manifest = fs.load_manifest(fs.root / "projects" / "test-proj" / "updates")
+        assert any(e.name == "005-final-test.md" for e in manifest.files)
 
 
 class TestSoftDelete:
@@ -397,139 +410,241 @@ class TestMCPTools:
         return asyncio.run(server.call_tool(tool, kwargs))
 
     def test_create_project(self, mcp_server):
-        r = parse_result(self._call(mcp_server, "create_project", slug="my-proj", name="My Project"))
+        r = parse_result(
+            self._call(mcp_server, "create_project", slug="my-proj", name="My Project")
+        )
         assert "error" not in r
         assert r["result"]["slug"] == "my-proj"
 
     def test_create_project_duplicate(self, mcp_server):
         self._call(mcp_server, "create_project", slug="dup-proj", name="Dup")
-        r = parse_result(self._call(mcp_server, "create_project", slug="dup-proj", name="Dup 2"))
+        r = parse_result(
+            self._call(mcp_server, "create_project", slug="dup-proj", name="Dup 2")
+        )
         assert "error" in r
 
     def test_create_project_invalid_slug(self, mcp_server):
-        r = parse_result(self._call(mcp_server, "create_project", slug="My Project", name="My Project"))
+        r = parse_result(
+            self._call(
+                mcp_server, "create_project", slug="My Project", name="My Project"
+            )
+        )
         assert "error" in r
 
     def test_create_project_invalid_status(self, mcp_server):
-        r = parse_result(self._call(mcp_server, "create_project", slug="my-proj", name="My", status="unknown"))
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "create_project",
+                slug="my-proj",
+                name="My",
+                status="unknown",
+            )
+        )
         assert "error" in r
 
     def test_list_projects(self, mcp_server):
-        self._call(mcp_server, "create_project", slug="proj-a", name="Project A", status="active")
-        self._call(mcp_server, "create_project", slug="proj-b", name="Project B", status="paused")
+        self._call(
+            mcp_server,
+            "create_project",
+            slug="proj-a",
+            name="Project A",
+            status="active",
+        )
+        self._call(
+            mcp_server,
+            "create_project",
+            slug="proj-b",
+            name="Project B",
+            status="paused",
+        )
         r = parse_result(self._call(mcp_server, "list_projects"))
         slugs = [p["slug"] for p in r["result"]]
         assert "proj-a" in slugs and "proj-b" in slugs
 
     def test_list_projects_filter_status(self, mcp_server):
-        self._call(mcp_server, "create_project", slug="proj-active", name="Active", status="active")
-        self._call(mcp_server, "create_project", slug="proj-paused", name="Paused", status="paused")
+        self._call(
+            mcp_server,
+            "create_project",
+            slug="proj-active",
+            name="Active",
+            status="active",
+        )
+        self._call(
+            mcp_server,
+            "create_project",
+            slug="proj-paused",
+            name="Paused",
+            status="paused",
+        )
         r = parse_result(self._call(mcp_server, "list_projects", status="active"))
         slugs = [p["slug"] for p in r["result"]]
         assert "proj-active" in slugs
         assert "proj-paused" not in slugs
 
     def test_get_project_context(self, mcp_server):
-        self._call(mcp_server, "create_project", slug="ctx-proj", name="Context Project")
+        self._call(
+            mcp_server, "create_project", slug="ctx-proj", name="Context Project"
+        )
         r = parse_result(self._call(mcp_server, "get_project_context", slug="ctx-proj"))
         assert "error" not in r
         assert r["result"]["meta"] is not None
-        assert "ctx-proj" in r["result"]["manifest"] or "Folder Manifest" in r["result"]["manifest"]
+        assert (
+            "ctx-proj" in r["result"]["manifest"]
+            or "Folder Manifest" in r["result"]["manifest"]
+        )
 
     def test_get_project_context_not_found(self, mcp_server):
-        r = parse_result(self._call(mcp_server, "get_project_context", slug="no-such-proj"))
+        r = parse_result(
+            self._call(mcp_server, "get_project_context", slug="no-such-proj")
+        )
         assert "error" in r
 
     def test_write_and_read_file(self, mcp_server):
         self._call(mcp_server, "create_project", slug="rw-proj", name="RW")
-        self._call(mcp_server, "write_file",
-                   path="projects/rw-proj/notes/note.md",
-                   content="# Test Note\n\nContent here.")
-        r = parse_result(self._call(mcp_server, "read_file", path="projects/rw-proj/notes/note.md"))
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/rw-proj/notes/note.md",
+            content="# Test Note\n\nContent here.",
+        )
+        r = parse_result(
+            self._call(mcp_server, "read_file", path="projects/rw-proj/notes/note.md")
+        )
         assert "Content here" in r["result"]
 
     def test_read_file_blocks_index_yaml(self, mcp_server):
         self._call(mcp_server, "create_project", slug="block-proj", name="Block")
-        r = parse_result(self._call(mcp_server, "read_file", path="projects/block-proj/_index.yaml"))
+        r = parse_result(
+            self._call(mcp_server, "read_file", path="projects/block-proj/_index.yaml")
+        )
         assert "error" in r
 
     def test_write_file_blocks_index_yaml(self, mcp_server):
         self._call(mcp_server, "create_project", slug="wblock-proj", name="WBlock")
-        r = parse_result(self._call(mcp_server, "write_file",
-                                    path="projects/wblock-proj/_index.yaml",
-                                    content="bad"))
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "write_file",
+                path="projects/wblock-proj/_index.yaml",
+                content="bad",
+            )
+        )
         assert "error" in r
 
     def test_append_to_file(self, mcp_server):
         self._call(mcp_server, "create_project", slug="app-proj", name="Append")
-        r = parse_result(self._call(mcp_server, "append_to_file",
-                                    path="projects/app-proj/decisions.md",
-                                    content="\n## Decision 1\n\nWe chose REST."))
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "append_to_file",
+                path="projects/app-proj/decisions.md",
+                content="\n## Decision 1\n\nWe chose REST.",
+            )
+        )
         assert "error" not in r
 
     def test_get_folder_manifest(self, mcp_server):
         self._call(mcp_server, "create_project", slug="mani-proj", name="Manifest")
-        self._call(mcp_server, "write_file",
-                   path="projects/mani-proj/notes/note.md",
-                   content="# Note",
-                   description="A test note")
-        r = parse_result(self._call(mcp_server, "get_folder_manifest",
-                                    folder_path="projects/mani-proj/notes"))
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/mani-proj/notes/note.md",
+            content="# Note",
+            description="A test note",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "get_folder_manifest",
+                folder_path="projects/mani-proj/notes",
+            )
+        )
         assert "error" not in r
         assert "note.md" in r["result"]
 
     def test_update_file_description(self, mcp_server):
         self._call(mcp_server, "create_project", slug="upd-proj", name="Update")
-        self._call(mcp_server, "write_file",
-                   path="projects/upd-proj/notes/note.md",
-                   content="# Note")
-        r = parse_result(self._call(mcp_server, "update_file_description",
-                                    folder_path="projects/upd-proj/notes",
-                                    filename="note.md",
-                                    description="Updated description",
-                                    read_when="When reviewing notes"))
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/upd-proj/notes/note.md",
+            content="# Note",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "update_file_description",
+                folder_path="projects/upd-proj/notes",
+                filename="note.md",
+                description="Updated description",
+                read_when="When reviewing notes",
+            )
+        )
         assert "error" not in r
 
     def test_search_files(self, mcp_server):
         self._call(mcp_server, "create_project", slug="srch-proj", name="Search")
-        self._call(mcp_server, "write_file",
-                   path="projects/srch-proj/notes/note.md",
-                   content="# Design\n\nWe chose Python for this.")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/srch-proj/notes/note.md",
+            content="# Design\n\nWe chose Python for this.",
+        )
         r = parse_result(self._call(mcp_server, "search_files", keyword="Python"))
         assert any("Python" in result["line"] for result in r["result"])
 
     def test_delete_file(self, mcp_server):
         self._call(mcp_server, "create_project", slug="del-proj", name="Delete")
-        self._call(mcp_server, "write_file",
-                   path="projects/del-proj/notes/note.md",
-                   content="# Note to delete")
-        r = parse_result(self._call(mcp_server, "delete_file",
-                                    path="projects/del-proj/notes/note.md"))
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/del-proj/notes/note.md",
+            content="# Note to delete",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server, "delete_file", path="projects/del-proj/notes/note.md"
+            )
+        )
         assert "error" not in r
         assert "_trash" in r["result"]
 
     def test_list_stale_manifests(self, mcp_server):
         self._call(mcp_server, "create_project", slug="stale-proj", name="Stale")
-        self._call(mcp_server, "append_to_file",
-                   path="projects/stale-proj/decisions.md",
-                   content="\n## Decision")
+        self._call(
+            mcp_server,
+            "append_to_file",
+            path="projects/stale-proj/decisions.md",
+            content="\n## Decision",
+        )
         r = parse_result(self._call(mcp_server, "list_stale_manifests"))
         assert "projects/stale-proj" in r["result"]
 
     def test_create_person(self, mcp_server):
-        r = parse_result(self._call(mcp_server, "create_person",
-                                    slug="jane-smith",
-                                    name="Jane Smith",
-                                    title="CTO",
-                                    email="jane@test.com"))
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "create_person",
+                slug="jane-smith",
+                name="Jane Smith",
+                title="CTO",
+                email="jane@test.com",
+            )
+        )
         assert "error" not in r
         assert "Jane Smith" in r["result"]["message"]
 
     def test_create_company(self, mcp_server):
-        r = parse_result(self._call(mcp_server, "create_company",
-                                    slug="test-corp",
-                                    name="Test Corp",
-                                    industry="Technology"))
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "create_company",
+                slug="test-corp",
+                name="Test Corp",
+                industry="Technology",
+            )
+        )
         assert "error" not in r
 
     def test_get_person(self, mcp_server):
@@ -556,21 +671,64 @@ class TestMCPTools:
 
     def test_create_knowledge_entry(self, mcp_server):
         self._call(mcp_server, "create_project", slug="know-proj", name="Knowledge")
-        r = parse_result(self._call(mcp_server, "create_knowledge_entry",
-                                    project_slug="know-proj",
-                                    topic="auth-design",
-                                    content="OAuth2 chosen.",
-                                    frontmatter={"source": "meeting", "processed": "2025-01-15"},
-                                    description="Auth design decision",
-                                    read_when="Before coding auth"))
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "create_knowledge_entry",
+                project_slug="know-proj",
+                topic="auth-design",
+                content="OAuth2 chosen.",
+                frontmatter={"source": "meeting", "processed": "2025-01-15"},
+                description="Auth design decision",
+                read_when="Before coding auth",
+            )
+        )
         assert "error" not in r
         assert "auth-design" in r["result"]
 
     def test_update_manifest(self, mcp_server):
         self._call(mcp_server, "create_project", slug="rebuild-proj", name="Rebuild")
-        r = parse_result(self._call(mcp_server, "update_manifest",
-                                    folder_path="projects/rebuild-proj"))
+        r = parse_result(
+            self._call(
+                mcp_server, "update_manifest", folder_path="projects/rebuild-proj"
+            )
+        )
         assert "error" not in r
+
+    def test_updates_append_file_visible_in_folder_manifest(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="updates-proj", name="Updates")
+        self._call(
+            mcp_server,
+            "append_to_file",
+            path="projects/updates-proj/updates/001-setup.md",
+            content="\n## Setup\n",
+        )
+        self._call(
+            mcp_server,
+            "append_to_file",
+            path="projects/updates-proj/updates/003-final-test.md",
+            content="\n## Final test\n",
+        )
+
+        manifest_result = parse_result(
+            self._call(
+                mcp_server,
+                "get_folder_manifest",
+                folder_path="projects/updates-proj/updates",
+            )
+        )
+        assert "error" not in manifest_result
+        assert "003-final-test.md" in manifest_result["result"]
+
+        rebuild_result = parse_result(
+            self._call(
+                mcp_server,
+                "update_manifest",
+                folder_path="projects/updates-proj/updates",
+            )
+        )
+        assert "error" not in rebuild_result
+        assert "2 entries" in rebuild_result["result"]
 
 
 # ---------------------------------------------------------------------------
@@ -595,10 +753,12 @@ class TestGuideTemplate:
 
     def test_column_headers(self):
         from templates import PROJECT_GUIDE_TEMPLATE
+
         assert "| Folder / File | Contains | Read when |" in PROJECT_GUIDE_TEMPLATE
 
     def test_includes_status_md(self):
         from templates import PROJECT_GUIDE_TEMPLATE
+
         assert "_status.md" in PROJECT_GUIDE_TEMPLATE
 
     def test_scaffold_guide_uses_template(self, fs):
@@ -648,30 +808,36 @@ class TestGetProjectContextDeep:
 
     def test_shallow_includes_status(self, mcp_server):
         self._call(mcp_server, "create_project", slug="deep-proj", name="Deep Test")
-        r = parse_result(self._call(mcp_server, "get_project_context", slug="deep-proj"))
+        r = parse_result(
+            self._call(mcp_server, "get_project_context", slug="deep-proj")
+        )
         assert "error" not in r
         assert "status" in r["result"]
         assert r["result"]["status"] is not None
 
     def test_shallow_has_no_deep_keys(self, mcp_server):
         self._call(mcp_server, "create_project", slug="shallow-proj", name="Shallow")
-        r = parse_result(self._call(mcp_server, "get_project_context", slug="shallow-proj"))
+        r = parse_result(
+            self._call(mcp_server, "get_project_context", slug="shallow-proj")
+        )
         assert "error" not in r
         assert "knowledge_manifest" not in r["result"]
         assert "people" not in r["result"]
 
     def test_deep_includes_knowledge_manifest(self, mcp_server):
         self._call(mcp_server, "create_project", slug="deep2-proj", name="Deep2")
-        r = parse_result(self._call(mcp_server, "get_project_context",
-                                    slug="deep2-proj", deep=True))
+        r = parse_result(
+            self._call(mcp_server, "get_project_context", slug="deep2-proj", deep=True)
+        )
         assert "error" not in r
         assert "knowledge_manifest" in r["result"]
         assert "people" in r["result"]
 
     def test_deep_knowledge_manifest_is_string(self, mcp_server):
         self._call(mcp_server, "create_project", slug="deep3-proj", name="Deep3")
-        r = parse_result(self._call(mcp_server, "get_project_context",
-                                    slug="deep3-proj", deep=True))
+        r = parse_result(
+            self._call(mcp_server, "get_project_context", slug="deep3-proj", deep=True)
+        )
         assert isinstance(r["result"]["knowledge_manifest"], str)
 
     @pytest.fixture
@@ -686,43 +852,78 @@ class TestSearchFilesProjectSlug:
     def test_project_slug_scopes_search(self, mcp_server):
         self._call(mcp_server, "create_project", slug="proj-a", name="Proj A")
         self._call(mcp_server, "create_project", slug="proj-b", name="Proj B")
-        self._call(mcp_server, "write_file",
-                   path="projects/proj-a/notes/note.md",
-                   content="# Note\n\nUniqueTermAlpha here.")
-        self._call(mcp_server, "write_file",
-                   path="projects/proj-b/notes/note.md",
-                   content="# Note\n\nDifferent content.")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/proj-a/notes/note.md",
+            content="# Note\n\nUniqueTermAlpha here.",
+        )
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/proj-b/notes/note.md",
+            content="# Note\n\nDifferent content.",
+        )
         # Search within proj-a only
-        r = parse_result(self._call(mcp_server, "search_files",
-                                    keyword="UniqueTermAlpha", project_slug="proj-a"))
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "search_files",
+                keyword="UniqueTermAlpha",
+                project_slug="proj-a",
+            )
+        )
         assert len(r["result"]) > 0
         assert all("proj-a" in hit["path"] for hit in r["result"])
 
     def test_project_slug_excludes_other_projects(self, mcp_server):
         self._call(mcp_server, "create_project", slug="src-a", name="Src A")
         self._call(mcp_server, "create_project", slug="src-b", name="Src B")
-        self._call(mcp_server, "write_file",
-                   path="projects/src-a/notes/note.md",
-                   content="# SharedKeyword")
-        self._call(mcp_server, "write_file",
-                   path="projects/src-b/notes/note.md",
-                   content="# SharedKeyword")
-        r = parse_result(self._call(mcp_server, "search_files",
-                                    keyword="SharedKeyword", project_slug="src-a"))
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/src-a/notes/note.md",
+            content="# SharedKeyword",
+        )
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/src-b/notes/note.md",
+            content="# SharedKeyword",
+        )
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "search_files",
+                keyword="SharedKeyword",
+                project_slug="src-a",
+            )
+        )
         assert all("src-a" in hit["path"] for hit in r["result"])
         assert not any("src-b" in hit["path"] for hit in r["result"])
 
     def test_project_slug_not_found_returns_error(self, mcp_server):
-        r = parse_result(self._call(mcp_server, "search_files",
-                                    keyword="anything", project_slug="no-such-proj"))
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "search_files",
+                keyword="anything",
+                project_slug="no-such-proj",
+            )
+        )
         assert "error" in r
 
     def test_no_filter_searches_everywhere(self, mcp_server):
         self._call(mcp_server, "create_project", slug="glob-proj", name="Global")
-        self._call(mcp_server, "write_file",
-                   path="projects/glob-proj/notes/note.md",
-                   content="# GlobalSearchTerm found here.")
-        r = parse_result(self._call(mcp_server, "search_files", keyword="GlobalSearchTerm"))
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/glob-proj/notes/note.md",
+            content="# GlobalSearchTerm found here.",
+        )
+        r = parse_result(
+            self._call(mcp_server, "search_files", keyword="GlobalSearchTerm")
+        )
         assert len(r["result"]) > 0
 
     @pytest.fixture
@@ -740,7 +941,9 @@ class TestListGlobalPeopleCompanies:
         assert r["result"] == []
 
     def test_list_global_people_after_create(self, mcp_server):
-        self._call(mcp_server, "create_person", slug="alice-wonder", name="Alice Wonder")
+        self._call(
+            mcp_server, "create_person", slug="alice-wonder", name="Alice Wonder"
+        )
         self._call(mcp_server, "create_person", slug="bob-builder", name="Bob Builder")
         r = parse_result(self._call(mcp_server, "list_global_people"))
         assert "error" not in r
@@ -761,8 +964,13 @@ class TestListGlobalPeopleCompanies:
         assert "widget-corp.md" in names
 
     def test_list_people_entries_have_description(self, mcp_server):
-        self._call(mcp_server, "create_person", slug="desc-person", name="Desc Person",
-                   description="A described person")
+        self._call(
+            mcp_server,
+            "create_person",
+            slug="desc-person",
+            name="Desc Person",
+            description="A described person",
+        )
         r = parse_result(self._call(mcp_server, "list_global_people"))
         entry = next(e for e in r["result"] if e["name"] == "desc-person.md")
         assert entry["description"] == "A described person"
@@ -778,9 +986,12 @@ class TestRebuildRefsIndex:
 
     def test_rebuild_refs_index_tool(self, mcp_server):
         self._call(mcp_server, "create_project", slug="refs-proj", name="Refs")
-        self._call(mcp_server, "write_file",
-                   path="projects/refs-proj/notes/note.md",
-                   content="# Note\n\n@john-doe and #python mentioned.")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/refs-proj/notes/note.md",
+            content="# Note\n\n@john-doe and #python mentioned.",
+        )
         r = parse_result(self._call(mcp_server, "rebuild_refs_index"))
         assert "error" not in r
         assert "indexed" in r["result"]
@@ -788,9 +999,12 @@ class TestRebuildRefsIndex:
     def test_rebuild_fixes_drifted_index(self, mcp_server, tmp_path):
         """Rebuild should re-scan files even if the index was corrupted."""
         self._call(mcp_server, "create_project", slug="drift-proj", name="Drift")
-        self._call(mcp_server, "write_file",
-                   path="projects/drift-proj/notes/note.md",
-                   content="# Note\n\n#drifted-tag mentioned.")
+        self._call(
+            mcp_server,
+            "write_file",
+            path="projects/drift-proj/notes/note.md",
+            content="# Note\n\n#drifted-tag mentioned.",
+        )
         # Corrupt the index
         idx_path = tmp_path / "_refs-index.json"
         idx_path.write_text('{"entries": {}}', encoding="utf-8")
@@ -811,7 +1025,10 @@ class TestUpdatesManifestConvention:
         fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
         manifest = fs.load_manifest(fs.root / "projects" / "upd-proj" / "updates")
         assert manifest.description is not None
-        assert "log" in manifest.description.lower() or "chronological" in manifest.description.lower()
+        assert (
+            "log" in manifest.description.lower()
+            or "chronological" in manifest.description.lower()
+        )
 
     def test_updates_manifest_has_last_entry_date_null(self, fs):
         fs.scaffold_project("upd-proj", make_meta(slug="upd-proj"))
@@ -917,7 +1134,9 @@ class TestSearchFilesSkipsTrash:
 
     def test_trash_not_searched_globally(self, fs):
         fs.scaffold_project("trash-proj", make_meta(slug="trash-proj"))
-        fs.write_file("projects/trash-proj/notes/note.md", "# Note\n\nUniqueTrashKeyword here.")
+        fs.write_file(
+            "projects/trash-proj/notes/note.md", "# Note\n\nUniqueTrashKeyword here."
+        )
         # Soft-delete — file moves to _trash/
         fs.soft_delete("projects/trash-proj/notes/note.md")
         # Global search must not find it
