@@ -93,21 +93,21 @@ def validate_date(s: str) -> bool:
 def is_append_only(path: Path) -> bool:
     """Return True if path should only allow appends (updates/*.md, decisions.md)."""
     parts = path.parts
-    if path.name == "decisions.md":
+    if path.name.lower() == "decisions.md":
         return True
-    if len(parts) >= 2 and parts[-2] == "updates" and path.suffix == ".md":
+    if len(parts) >= 2 and parts[-2].lower() == "updates" and path.suffix.lower() == ".md":
         return True
     return False
 
 
 def is_manifest(path: Path) -> bool:
     """Return True if path is a _index.yaml (protected from direct write)."""
-    return path.name == "_index.yaml"
+    return path.name.lower() == "_index.yaml"
 
 
 def is_updates_folder(folder: Path) -> bool:
     """Return True if folder is an updates/ subdirectory."""
-    return folder.name == "updates"
+    return folder.name.lower() == "updates"
 
 
 def parse_refs(content: str) -> dict[str, list[str]]:
@@ -347,20 +347,17 @@ class MemoryFS:
         """Scan folder, add missing entries, remove entries for deleted files."""
         manifest = self.load_manifest(folder)
 
-        # updates/ folders use a summary-only convention — no per-file tracking
+        # updates/ folders use a summary-only convention — but we still scan files
         if is_updates_folder(folder):
-            manifest.last_updated = _today()
-            manifest.stale = False
             if not manifest.description:
                 manifest.description = "Chronological update log. Read the file directly for recent entries."
-            self.save_manifest(folder, manifest)
-            return manifest
+
 
         existing_names = {e.name for e in manifest.files}
 
         # Add missing entries
         for p in sorted(folder.iterdir()):
-            if p.is_file() and p.suffix in (".md", ".yaml", ".json") and not p.name.startswith("_"):
+            if p.is_file() and p.suffix.lower() in (".md", ".yaml", ".json") and not p.name.startswith("_"):
                 if p.name not in existing_names:
                     manifest.files.append(ManifestEntry(name=p.name))
 
@@ -500,11 +497,21 @@ class MemoryFS:
             (project_dir / fname).write_text(content, encoding="utf-8")
 
         # correspondence sub-files
+        correspondence_dir = project_dir / "correspondence"
+        correspondence_manifest = self.load_manifest(correspondence_dir)
         for fname in ("email-threads.md", "calls.md", "messages.md"):
-            (project_dir / "correspondence" / fname).write_text(
+            (correspondence_dir / fname).write_text(
                 f"# {fname.replace('-', ' ').title()} — {meta.name}\n\n",
                 encoding="utf-8",
             )
+            correspondence_manifest.files.append(
+                ManifestEntry(
+                    name=fname,
+                    description=f"Chronological {fname.replace('.md', '').replace('-', ' ')} log for {meta.name}."
+                )
+            )
+        correspondence_manifest.last_updated = today
+        self.save_manifest(correspondence_dir, correspondence_manifest)
 
         # Populate project _index.yaml with core file entries
         project_manifest = self.load_manifest(project_dir)
@@ -712,7 +719,7 @@ class MemoryFS:
 
         # Knowledge frontmatter check
         rel = self._rel(abs_path)
-        if "knowledge" in rel and abs_path.suffix == ".md":
+        if "knowledge" in rel and abs_path.suffix.lower() == ".md":
             valid, fm_errors = validate_knowledge_frontmatter(content)
             if not valid:
                 warnings.extend(fm_errors)
@@ -731,7 +738,7 @@ class MemoryFS:
 
         # Update manifest
         folder = abs_path.parent
-        if not is_manifest(abs_path) and abs_path.suffix in (".md", ".yaml"):
+        if not is_manifest(abs_path) and abs_path.suffix.lower() in (".md", ".yaml", ".json"):
             entry = ManifestEntry(
                 name=abs_path.name,
                 description=description,
@@ -770,10 +777,20 @@ class MemoryFS:
             manifest = self.load_manifest(abs_path.parent)
             manifest.last_entry_date = _today()
             manifest.last_updated = _today()
+            # Also ensure file is in manifest
+            if not any(f.name == abs_path.name for f in manifest.files):
+                manifest.files.append(ManifestEntry(name=abs_path.name))
             self.save_manifest(abs_path.parent, manifest)
         else:
             # Mark manifest stale for other append-only files (e.g. decisions.md)
-            self.mark_manifest_stale(abs_path.parent)
+            # And ensure file is in manifest if it's a new or existing append-only file
+            manifest = self.load_manifest(abs_path.parent)
+            if not any(f.name == abs_path.name for f in manifest.files):
+                manifest.files.append(ManifestEntry(name=abs_path.name))
+                manifest.last_updated = _today()
+                self.save_manifest(abs_path.parent, manifest)
+            else:
+                self.mark_manifest_stale(abs_path.parent)
 
         return warnings
 

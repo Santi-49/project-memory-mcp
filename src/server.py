@@ -42,7 +42,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             "Structured project memory filesystem for long-term LLM memory. "
             "Manages projects, people, companies, correspondence, decisions, and processed "
             "knowledge as plain Markdown and YAML files on disk.\n\n"
-            "Read resource memory://guide before using any tool."
+            "CRITICAL: You are strictly forbidden from executing any tools in this server until you have called `read_resource` with `memory://guide` to understand the data schemas and layout."
         ),
     )
 
@@ -56,7 +56,12 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         type: Optional[str] = None,
         tags: Optional[str] = None,
     ) -> dict[str, Any]:
-        """List all projects, optionally filtered by status, type, or tags (comma-separated)."""
+        """List all projects, optionally filtered by status, type, or tags (comma-separated).
+        
+        🛑 CRITICAL INSTRUCTION: If you have not yet read the resource `memory://guide` 
+        in this conversation, you MUST do so before attempting to use this tool or 
+        any other tool in this project memory server!
+        """
         try:
             index = fs.load_projects_index()
             projects = index.projects
@@ -82,6 +87,10 @@ def create_server(root: Path) -> fastmcp.FastMCP:
     @mcp.tool
     def get_project_context(slug: str, deep: bool = False) -> dict[str, Any]:
         """Return project context.
+
+        🛑 CRITICAL INSTRUCTION: If you have not yet read the resource `memory://guide` 
+        in this conversation, you MUST do so before attempting to use this tool or 
+        any other tool in this project memory server!
 
         Lightweight (default): _status.md + _meta.yaml + rendered _index.yaml.
         Deep (deep=True): additionally includes knowledge/_index.yaml manifest
