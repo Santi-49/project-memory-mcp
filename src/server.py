@@ -16,7 +16,12 @@ from typing import Any, Optional
 
 import fastmcp
 
-from filesystem import MemoryFS, is_manifest, to_kebab_case, validate_knowledge_frontmatter
+from filesystem import (
+    MemoryFS,
+    is_manifest,
+    to_kebab_case,
+    validate_knowledge_frontmatter,
+)
 from guide import generate_guide
 from models import (
     FolderManifest,
@@ -30,6 +35,7 @@ from templates import KNOWLEDGE_ENTRY_TEMPLATE
 # ---------------------------------------------------------------------------
 # Server factory
 # ---------------------------------------------------------------------------
+
 
 def create_server(root: Path) -> fastmcp.FastMCP:
     root = root.resolve()  # ensure absolute so Path.relative_to() never fails
@@ -57,9 +63,9 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         tags: Optional[str] = None,
     ) -> dict[str, Any]:
         """List all projects, optionally filtered by status, type, or tags (comma-separated).
-        
-        🛑 CRITICAL INSTRUCTION: If you have not yet read the resource `memory://guide` 
-        in this conversation, you MUST do so before attempting to use this tool or 
+
+        🛑 CRITICAL INSTRUCTION: If you have not yet read the resource `memory://guide`
+        in this conversation, you MUST do so before attempting to use this tool or
         any other tool in this project memory server!
         """
         try:
@@ -72,10 +78,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                 projects = [p for p in projects if p.type == type]
             if tags:
                 tag_list = [t.strip() for t in tags.split(",")]
-                projects = [
-                    p for p in projects
-                    if any(t in p.tags for t in tag_list)
-                ]
+                projects = [p for p in projects if any(t in p.tags for t in tag_list)]
 
             return {
                 "result": [p.model_dump() for p in projects],
@@ -88,8 +91,8 @@ def create_server(root: Path) -> fastmcp.FastMCP:
     def get_project_context(slug: str, deep: bool = False) -> dict[str, Any]:
         """Return project context.
 
-        🛑 CRITICAL INSTRUCTION: If you have not yet read the resource `memory://guide` 
-        in this conversation, you MUST do so before attempting to use this tool or 
+        🛑 CRITICAL INSTRUCTION: If you have not yet read the resource `memory://guide`
+        in this conversation, you MUST do so before attempting to use this tool or
         any other tool in this project memory server!
 
         Lightweight (default): _status.md + _meta.yaml + rendered _index.yaml.
@@ -105,7 +108,11 @@ def create_server(root: Path) -> fastmcp.FastMCP:
 
             # _status.md — always loaded first
             status_path = project_dir / "_status.md"
-            status_content = status_path.read_text(encoding="utf-8") if status_path.exists() else None
+            status_content = (
+                status_path.read_text(encoding="utf-8")
+                if status_path.exists()
+                else None
+            )
             if not status_path.exists():
                 warnings.append(f"_status.md is missing for project {slug!r}")
 
@@ -128,12 +135,16 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                 # Knowledge manifest
                 knowledge_dir = project_dir / "knowledge"
                 result["knowledge_manifest"] = (
-                    fs.render_manifest(knowledge_dir) if knowledge_dir.is_dir() else None
+                    fs.render_manifest(knowledge_dir)
+                    if knowledge_dir.is_dir()
+                    else None
                 )
                 # People file
                 people_path = project_dir / "people.md"
                 result["people"] = (
-                    people_path.read_text(encoding="utf-8") if people_path.exists() else None
+                    people_path.read_text(encoding="utf-8")
+                    if people_path.exists()
+                    else None
                 )
 
             return {"result": result, "warnings": warnings}
@@ -179,9 +190,14 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         description: Optional[str] = None,
         read_when: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Write a file with all rules enforced (kebab-case, append-only blocks, manifest update)."""
+        """Write a file with all rules enforced (kebab-case, append-only blocks, manifest update).
+
+        For existing files, read current content first to avoid unintended overwrite.
+        """
         try:
-            warnings = fs.write_file(path, content, description=description, read_when=read_when)
+            warnings = fs.write_file(
+                path, content, description=description, read_when=read_when
+            )
             return {"result": f"Written: {path}", "warnings": warnings}
         except ValueError as e:
             return {"error": str(e), "warnings": []}
@@ -190,7 +206,10 @@ def create_server(root: Path) -> fastmcp.FastMCP:
 
     @mcp.tool
     def append_to_file(path: str, content: str) -> dict[str, Any]:
-        """Append content to an append-only file (updates/*.md or decisions.md)."""
+        """Append content to an append-only file (updates/*.md or decisions.md).
+
+        Read the target file first when appending context-sensitive updates.
+        """
         try:
             warnings = fs.append_file(path, content)
             return {"result": f"Appended to: {path}", "warnings": warnings}
@@ -227,13 +246,19 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                 p_status = ProjectStatus(status)
             except ValueError:
                 valid = [s.value for s in ProjectStatus]
-                return {"error": f"Invalid status {status!r}. Must be one of: {valid}", "warnings": []}
+                return {
+                    "error": f"Invalid status {status!r}. Must be one of: {valid}",
+                    "warnings": [],
+                }
 
             try:
                 p_type = ProjectType(type)
             except ValueError:
                 valid = [t.value for t in ProjectType]
-                return {"error": f"Invalid type {type!r}. Must be one of: {valid}", "warnings": []}
+                return {
+                    "error": f"Invalid type {type!r}. Must be one of: {valid}",
+                    "warnings": [],
+                }
 
             today = date.today().isoformat()
             project_meta = ProjectMeta(
@@ -250,7 +275,9 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                 updated=today,
             )
 
-            project_dir = fs.scaffold_project(slug, project_meta, description=description)
+            project_dir = fs.scaffold_project(
+                slug, project_meta, description=description
+            )
 
             return {
                 "result": {
@@ -273,23 +300,34 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         type: Optional[str] = None,
         meta: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        """Update a project's metadata (status, type, name, tags, etc)."""
+        """Update a project's metadata (status, type, name, tags, etc).
+
+        Read current project context first before applying metadata changes.
+        """
         try:
             if status is not None:
                 try:
                     ProjectStatus(status)
                 except ValueError:
                     valid = [s.value for s in ProjectStatus]
-                    return {"error": f"Invalid status {status!r}. Must be one of: {valid}", "warnings": []}
+                    return {
+                        "error": f"Invalid status {status!r}. Must be one of: {valid}",
+                        "warnings": [],
+                    }
 
             if type is not None:
                 try:
                     ProjectType(type)
                 except ValueError:
                     valid = [t.value for t in ProjectType]
-                    return {"error": f"Invalid type {type!r}. Must be one of: {valid}", "warnings": []}
+                    return {
+                        "error": f"Invalid type {type!r}. Must be one of: {valid}",
+                        "warnings": [],
+                    }
 
-            updated = fs.update_project(slug, name=name, status=status, type=type, meta=meta)
+            updated = fs.update_project(
+                slug, name=name, status=status, type=type, meta=meta
+            )
 
             return {
                 "result": {
@@ -313,7 +351,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                     "error": "Destructive operation. You must ask the user for permission and then set confirm=true.",
                     "warnings": [],
                 }
-            
+
             trash_path = fs.delete_project(slug)
             return {
                 "result": f"Project {slug!r} moved to trash: {trash_path}",
@@ -338,6 +376,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             kebab_topic = to_kebab_case(topic)
             # Build frontmatter YAML string
             import yaml
+
             fm_str = yaml.dump(frontmatter, default_flow_style=False).strip()
             full_content = f"---\n{fm_str}\n---\n\n# {topic}\n\n{content}"
 
@@ -378,7 +417,10 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         read_when: Optional[str] = None,
         stale_after: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Targeted update of a manifest entry's description/read_when/stale_after."""
+        """Targeted update of a manifest entry's description/read_when/stale_after.
+
+        Read the folder manifest first to avoid overwriting a newer description.
+        """
         try:
             folder = fs._safe_path(folder_path)
             if not folder.is_dir():
@@ -493,9 +535,10 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         company: Optional[str] = None,
         email: Optional[str] = None,
         phone: Optional[str] = None,
+        global_description: Optional[str] = None,
         description: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Create a person file in _global/people/ and update its _index.yaml."""
+        """Create a global person profile and update _global/people/_index.yaml."""
         try:
             kebab = to_kebab_case(slug)
             if kebab != slug:
@@ -513,8 +556,12 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                 extra["Email"] = email
             if phone:
                 extra["Phone"] = phone
+            if global_description:
+                extra["Description"] = global_description
 
-            path = fs.create_person(slug, name, extra_fields=extra or None, description=description)
+            path = fs.create_person(
+                slug, name, extra_fields=extra or None, description=description
+            )
             return {
                 "result": {
                     "path": fs._rel(path),
@@ -550,7 +597,9 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             if website:
                 extra["Website"] = website
 
-            path = fs.create_company(slug, name, extra_fields=extra or None, description=description)
+            path = fs.create_company(
+                slug, name, extra_fields=extra or None, description=description
+            )
             return {
                 "result": {
                     "path": fs._rel(path),
@@ -571,17 +620,29 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         company: Optional[str] = None,
         email: Optional[str] = None,
         phone: Optional[str] = None,
+        global_description: Optional[str] = None,
         description: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Update structured fields for an existing person file."""
+        """Update structured fields for a global person profile and sync linked projects.
+
+        Read the person profile first with get_person to avoid overriding manual notes context.
+        """
         try:
             extra: dict[str, Any] = {}
-            if title is not None: extra["Title"] = title
-            if company is not None: extra["Company"] = company
-            if email is not None: extra["Email"] = email
-            if phone is not None: extra["Phone"] = phone
+            if title is not None:
+                extra["Title"] = title
+            if company is not None:
+                extra["Company"] = company
+            if email is not None:
+                extra["Email"] = email
+            if phone is not None:
+                extra["Phone"] = phone
+            if global_description is not None:
+                extra["Description"] = global_description
 
-            path = fs.update_person(slug, name=name, extra_fields=extra or None, description=description)
+            path = fs.update_person(
+                slug, name=name, extra_fields=extra or None, description=description
+            )
             return {
                 "result": {
                     "path": fs._rel(path),
@@ -602,13 +663,20 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         website: Optional[str] = None,
         description: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Update structured fields for an existing company file."""
+        """Update structured fields for an existing company file.
+
+        Read the company profile first with get_company before modifying fields.
+        """
         try:
             extra: dict[str, Any] = {}
-            if industry is not None: extra["Industry"] = industry
-            if website is not None: extra["Website"] = website
+            if industry is not None:
+                extra["Industry"] = industry
+            if website is not None:
+                extra["Website"] = website
 
-            path = fs.update_company(slug, name=name, extra_fields=extra or None, description=description)
+            path = fs.update_company(
+                slug, name=name, extra_fields=extra or None, description=description
+            )
             return {
                 "result": {
                     "path": fs._rel(path),
@@ -664,6 +732,75 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             return {"error": str(e), "warnings": []}
 
     @mcp.tool
+    def link_person_to_project(person_slug: str, project_slug: str) -> dict[str, Any]:
+        """Create a person-project relationship and sync global + project people views."""
+        try:
+            person_path, project_people_path = fs.link_person_to_project(
+                person_slug, project_slug
+            )
+            return {
+                "result": {
+                    "person": fs._rel(person_path),
+                    "project_people": fs._rel(project_people_path),
+                    "message": f"Linked @{person_slug} to [[{project_slug}]]",
+                },
+                "warnings": [],
+            }
+        except FileNotFoundError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def unlink_person_from_project(
+        person_slug: str, project_slug: str
+    ) -> dict[str, Any]:
+        """Remove a person-project relationship and sync global + project people views."""
+        try:
+            person_path, project_people_path = fs.unlink_person_from_project(
+                person_slug, project_slug
+            )
+            return {
+                "result": {
+                    "person": fs._rel(person_path),
+                    "project_people": fs._rel(project_people_path),
+                    "message": f"Unlinked @{person_slug} from [[{project_slug}]]",
+                },
+                "warnings": [],
+            }
+        except FileNotFoundError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def edit_person_notes(
+        slug: str,
+        notes: str,
+        mode: str = "append",
+    ) -> dict[str, Any]:
+        """Edit manual notes in a global person profile.
+
+        First call get_person(slug) to preserve existing note context.
+        Use this tool only when the user explicitly asks to add or modify manual notes.
+        """
+        try:
+            path, warnings = fs.edit_person_notes(slug=slug, notes=notes, mode=mode)
+            return {
+                "result": {
+                    "path": fs._rel(path),
+                    "message": f"Manual notes updated for person {slug!r} using mode={mode!r}",
+                },
+                "warnings": warnings,
+            }
+        except FileNotFoundError as e:
+            return {"error": str(e), "warnings": []}
+        except ValueError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
     def rebuild_refs_index() -> dict[str, Any]:
         """Rebuild _refs-index.json by scanning all .md files from scratch."""
         try:
@@ -690,6 +827,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(

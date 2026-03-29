@@ -110,9 +110,94 @@ def is_manifest(path: Path) -> bool:
     return path.name.lower() == "_index.yaml"
 
 
+def is_project_people_file(path: Path) -> bool:
+    """Return True if path is projects/{slug}/people.md (auto-managed)."""
+    if path.name.lower() != "people.md":
+        return False
+    parts = tuple(p.lower() for p in path.parts)
+    return len(parts) >= 3 and parts[-3] == "projects"
+
+
 def is_updates_folder(folder: Path) -> bool:
     """Return True if folder is an updates/ subdirectory."""
     return folder.name.lower() == "updates"
+
+
+def _extract_markdown_field(content: str, field_name: str) -> Optional[str]:
+    """Extract '**Field:** value' line value; returns None if missing."""
+    pattern = re.compile(rf"^\*\*{re.escape(field_name)}:\*\*\s*(.*)$", re.MULTILINE)
+    m = pattern.search(content)
+    if not m:
+        return None
+    return m.group(1).strip()
+
+
+def _set_markdown_field(content: str, field_name: str, value: str) -> str:
+    """Set or insert a '**Field:** value' line."""
+    pattern = re.compile(rf"^\*\*{re.escape(field_name)}:\*\*.*$", re.MULTILINE)
+    new_line = f"**{field_name}:** {value}"
+    if pattern.search(content):
+        return pattern.sub(new_line, content, count=1)
+    return re.sub(
+        r"^(# .*)$", r"\1\n\n" + new_line, content, count=1, flags=re.MULTILINE
+    )
+
+
+def _extract_projects_from_person(content: str) -> list[str]:
+    """Extract project slugs from a person's '## Projects' section (supports [[slug]] and slug bullets)."""
+    m = re.search(
+        r"^## Projects\s*$([\s\S]*?)(?=^##\s+|\Z)", content, flags=re.MULTILINE
+    )
+    if not m:
+        return []
+    section = m.group(1)
+    links = re.findall(r"\[\[([a-z0-9-]+)\]\]", section)
+    bullets = re.findall(r"^\s*[-*]\s+([a-z0-9-]+)\s*$", section, flags=re.MULTILINE)
+    merged = sorted(set(links + bullets))
+    return merged
+
+
+def _render_person_projects_section(project_slugs: list[str]) -> str:
+    """Render canonical person projects section body."""
+    if not project_slugs:
+        return "## Projects\n- (none)\n"
+    lines = ["## Projects"]
+    for slug in sorted(set(project_slugs)):
+        lines.append(f"- [[{slug}]]")
+    return "\n".join(lines) + "\n"
+
+
+def _replace_person_projects_section(content: str, project_slugs: list[str]) -> str:
+    """Replace or append canonical '## Projects' section in a person file."""
+    replacement = _render_person_projects_section(project_slugs)
+    pattern = re.compile(r"^## Projects\s*$[\s\S]*?(?=^##\s+|\Z)", re.MULTILINE)
+    if pattern.search(content):
+        return pattern.sub(replacement, content, count=1)
+    return content.rstrip() + "\n\n" + replacement
+
+
+def _get_markdown_section_body(content: str, heading: str) -> Optional[str]:
+    """Return section body for a level-2 heading (without heading line), or None."""
+    pattern = re.compile(
+        rf"^## {re.escape(heading)}\s*$([\s\S]*?)(?=^##\s+|\Z)",
+        re.MULTILINE,
+    )
+    m = pattern.search(content)
+    if not m:
+        return None
+    return m.group(1)
+
+
+def _replace_markdown_section(content: str, heading: str, body: str) -> str:
+    """Replace or append a level-2 section with exact body content."""
+    replacement = f"## {heading}\n{body.rstrip()}\n"
+    pattern = re.compile(
+        rf"^## {re.escape(heading)}\s*$[\s\S]*?(?=^##\s+|\Z)",
+        re.MULTILINE,
+    )
+    if pattern.search(content):
+        return pattern.sub(replacement, content, count=1)
+    return content.rstrip() + "\n\n" + replacement
 
 
 def parse_refs(content: str) -> dict[str, list[str]]:
@@ -559,6 +644,9 @@ class MemoryFS:
         project_manifest.last_updated = today
         self.save_manifest(project_dir, project_manifest)
 
+        # Keep project people.md auto-managed from global person-project relationships.
+        self._ensure_project_people_sync(slug)
+
         # Update root _index.yaml
         root_manifest = self._load_root_manifest()
         root_manifest.projects = [p for p in root_manifest.projects if p.slug != slug]
@@ -722,6 +810,13 @@ class MemoryFS:
                 "_index.yaml is auto-managed. Use update_file_description or update_manifest tools instead."
             )
 
+        # Block project people.md (auto-managed from global person relationships)
+        rel = self._rel(abs_path)
+        if is_project_people_file(Path(rel)):
+            raise ValueError(
+                "projects/{slug}/people.md is auto-managed. Use link_person_to_project or unlink_person_from_project instead."
+            )
+
         # Block append-only files
         if is_append_only(abs_path):
             raise ValueError(
@@ -736,7 +831,6 @@ class MemoryFS:
             )
 
         # Knowledge frontmatter check
-        rel = self._rel(abs_path)
         if "knowledge" in rel and abs_path.suffix.lower() == ".md":
             valid, fm_errors = validate_knowledge_frontmatter(content)
             if not valid:
@@ -810,6 +904,9 @@ class MemoryFS:
             manifest = self.load_manifest(abs_path.parent)
             manifest.last_entry_date = _today()
             self.save_manifest(abs_path.parent, manifest)
+        else:
+            # Non-updates append-only files (currently decisions.md) stale the folder manifest.
+            self.mark_manifest_stale(abs_path.parent)
 
         return warnings
 
@@ -818,6 +915,12 @@ class MemoryFS:
         abs_path = self._safe_path(path)
         if not abs_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
+
+        rel = self._rel(abs_path)
+        if is_project_people_file(Path(rel)):
+            raise ValueError(
+                "projects/{slug}/people.md is auto-managed and cannot be deleted."
+            )
 
         trash_dir = self.root / "_trash"
         trash_dir.mkdir(exist_ok=True)
@@ -923,6 +1026,153 @@ class MemoryFS:
     # Global entity operations
     # ------------------------------------------------------------------
 
+    def _get_person_path(self, slug: str) -> Path:
+        return self.root / "_global" / "people" / f"{slug}.md"
+
+    def _get_person_company(self, person_content: str) -> str:
+        company = _extract_markdown_field(person_content, "Company")
+        if not company:
+            return "Other"
+        return company
+
+    def _ensure_project_people_sync(self, project_slug: str) -> Path:
+        """Regenerate projects/{slug}/people.md from global people linked to the project."""
+        project_dir = self.root / "projects" / project_slug
+        if not project_dir.exists():
+            raise FileNotFoundError(f"Project {project_slug!r} not found")
+
+        people_folder = self.root / "_global" / "people"
+        grouped: dict[str, list[tuple[str, str]]] = {}
+
+        if people_folder.exists():
+            for p in sorted(people_folder.glob("*.md")):
+                slug = p.stem
+                content = p.read_text(encoding="utf-8")
+                projects = _extract_projects_from_person(content)
+                if project_slug not in projects:
+                    continue
+                name = content.splitlines()[0].lstrip("# ").strip() if content else slug
+                company = self._get_person_company(content) or "Other"
+                grouped.setdefault(company, []).append((slug, name))
+
+        lines = [
+            f"# People - {project_slug}",
+            "",
+            "> Auto-managed from global person-project relationships.",
+            "",
+        ]
+        if not grouped:
+            lines.append("_(no linked people yet)_")
+        else:
+            for company in sorted(grouped.keys(), key=lambda x: x.lower()):
+                lines.append(f"## {company}")
+                for slug, name in sorted(grouped[company], key=lambda x: x[1].lower()):
+                    lines.append(f"- **@{slug}**: {name}")
+                lines.append("")
+
+        people_path = project_dir / "people.md"
+        people_content = "\n".join(lines).rstrip() + "\n"
+        people_path.write_text(people_content, encoding="utf-8")
+        self.update_refs_for_file(self._rel(people_path), people_content)
+
+        self.add_manifest_entry(
+            project_dir,
+            ManifestEntry(
+                name="people.md",
+                description=f"Auto-managed project people grouped by company for {project_slug}.",
+                read_when="Before communication; global person profiles remain source of truth.",
+            ),
+        )
+        return people_path
+
+    def link_person_to_project(
+        self, person_slug: str, project_slug: str
+    ) -> tuple[Path, Path]:
+        """Create person-project relation and sync both global person + project people.md."""
+        person_path = self._get_person_path(person_slug)
+        if not person_path.exists():
+            raise FileNotFoundError(f"Person {person_slug!r} not found")
+
+        project_dir = self.root / "projects" / project_slug
+        if not project_dir.exists():
+            raise FileNotFoundError(f"Project {project_slug!r} not found")
+
+        content = person_path.read_text(encoding="utf-8")
+        projects = _extract_projects_from_person(content)
+        projects = sorted(set(projects + [project_slug]))
+        content = _replace_person_projects_section(content, projects)
+        person_path.write_text(content, encoding="utf-8")
+
+        project_people_path = self._ensure_project_people_sync(project_slug)
+        return person_path, project_people_path
+
+    def unlink_person_from_project(
+        self, person_slug: str, project_slug: str
+    ) -> tuple[Path, Path]:
+        """Remove person-project relation and sync both global person + project people.md."""
+        person_path = self._get_person_path(person_slug)
+        if not person_path.exists():
+            raise FileNotFoundError(f"Person {person_slug!r} not found")
+
+        project_dir = self.root / "projects" / project_slug
+        if not project_dir.exists():
+            raise FileNotFoundError(f"Project {project_slug!r} not found")
+
+        content = person_path.read_text(encoding="utf-8")
+        projects = [
+            p for p in _extract_projects_from_person(content) if p != project_slug
+        ]
+        content = _replace_person_projects_section(content, projects)
+        person_path.write_text(content, encoding="utf-8")
+
+        project_people_path = self._ensure_project_people_sync(project_slug)
+        return person_path, project_people_path
+
+    def edit_person_notes(
+        self,
+        slug: str,
+        notes: str,
+        mode: str = "append",
+    ) -> tuple[Path, list[str]]:
+        """Edit manual notes section on a global person profile.
+
+        mode:
+          - append: append notes to existing section body
+          - replace: replace section body with notes
+        """
+        if mode not in {"append", "replace"}:
+            raise ValueError("mode must be 'append' or 'replace'")
+
+        path = self._get_person_path(slug)
+        if not path.exists():
+            raise FileNotFoundError(f"Person {slug!r} not found")
+
+        content = path.read_text(encoding="utf-8")
+        existing_body = _get_markdown_section_body(content, "Notes")
+        if existing_body is None:
+            existing_body = "\n_(manual notes empty)_\n"
+
+        if mode == "append":
+            base = existing_body.rstrip()
+            if base == "_(manual notes empty)_":
+                base = ""
+            if base:
+                new_body = f"{base}\n\n{notes.strip()}\n"
+            else:
+                new_body = f"{notes.strip()}\n"
+        else:
+            new_body = f"{notes.strip()}\n"
+
+        content = _replace_markdown_section(content, "Notes", new_body)
+        path.write_text(content, encoding="utf-8")
+
+        rel_path = self._rel(path)
+        self.update_refs_for_file(rel_path, content)
+
+        parsed = parse_refs(notes)
+        warnings = self.warn_unresolved_refs(parsed["refs"])
+        return path, warnings
+
     def create_person(
         self,
         slug: str,
@@ -937,13 +1187,14 @@ class MemoryFS:
             raise ValueError(f"Person {slug!r} already exists")
 
         content = PERSON_TEMPLATE.format(name=name)
+        company_value = "Other"
         if extra_fields:
             for field_name, field_value in extra_fields.items():
-                # Replace "**FieldName:** " (trailing space before newline) with value inline
-                placeholder = f"**{field_name}:** "
-                content = content.replace(
-                    placeholder, f"**{field_name}:** {field_value}", 1
-                )
+                value_str = "" if field_value is None else str(field_value)
+                content = _set_markdown_field(content, field_name, value_str)
+                if field_name.lower() == "company" and value_str.strip():
+                    company_value = value_str.strip()
+        content = _set_markdown_field(content, "Company", company_value)
 
         path.write_text(content, encoding="utf-8")
         self.add_manifest_entry(
@@ -1008,30 +1259,25 @@ class MemoryFS:
 
         if extra_fields:
             for field_name, field_value in extra_fields.items():
-                placeholder_pattern = rf"^\*\*{field_name}:\*\*.*$"
-                new_line = f"**{field_name}:** {field_value}"
+                value_str = "" if field_value is None else str(field_value)
+                if field_name.lower() == "company" and not value_str.strip():
+                    value_str = "Other"
+                content = _set_markdown_field(content, field_name, value_str)
 
-                if re.search(placeholder_pattern, content, flags=re.MULTILINE):
-                    content = re.sub(
-                        placeholder_pattern,
-                        new_line,
-                        content,
-                        count=1,
-                        flags=re.MULTILINE,
-                    )
-                else:
-                    content = re.sub(
-                        r"^(# .*)$",
-                        r"\1\n\n" + new_line,
-                        content,
-                        count=1,
-                        flags=re.MULTILINE,
-                    )
+        # Keep Projects section canonical and preserve existing links.
+        existing_projects = _extract_projects_from_person(content)
+        content = _replace_person_projects_section(content, existing_projects)
 
         path.write_text(content, encoding="utf-8")
 
         if description is not None:
             self.update_manifest_entry(folder, f"{slug}.md", description=description)
+
+        # If this person belongs to projects, refresh their project people.md grouping.
+        for project_slug in existing_projects:
+            project_dir = self.root / "projects" / project_slug
+            if project_dir.exists():
+                self._ensure_project_people_sync(project_slug)
 
         return path
 

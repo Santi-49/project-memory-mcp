@@ -54,15 +54,16 @@ PERSON_TEMPLATE = """\
 # {name}
 
 **Title:** 
-**Company:** 
+**Company:** Other
 **Email:** 
 **Phone:** 
+**Description:** 
 
 ## Notes
+_(manual notes empty)_
 
 ## Projects
-
-## Interactions
+- (none)
 
 """
 

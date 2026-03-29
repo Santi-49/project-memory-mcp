@@ -240,6 +240,11 @@ class TestWriteFile:
         with pytest.raises(ValueError, match="append-only"):
             fs.write_file("projects/test-proj/updates/2025-01-15.md", "overwrite")
 
+    def test_blocks_project_people_write(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        with pytest.raises(ValueError, match="auto-managed"):
+            fs.write_file("projects/test-proj/people.md", "manual edit")
+
     def test_warns_unresolved_ref(self, fs):
         fs.scaffold_project("test-proj", make_meta())
         warnings = fs.write_file(
@@ -318,6 +323,11 @@ class TestSoftDelete:
         with pytest.raises(FileNotFoundError):
             fs.soft_delete("projects/missing/notes/note.md")
 
+    def test_blocks_project_people_delete(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        with pytest.raises(ValueError, match="auto-managed"):
+            fs.soft_delete("projects/test-proj/people.md")
+
 
 class TestSearchFiles:
     def test_finds_keyword(self, fs):
@@ -380,6 +390,56 @@ class TestGlobalEntities:
     def test_resolve_ref_not_found(self, fs):
         with pytest.raises(FileNotFoundError):
             fs.resolve_ref("unknown-slug")
+
+    def test_link_person_to_project_updates_both_files(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.create_person("john-doe", "John Doe", extra_fields={"Company": "ACME"})
+
+        person_path, project_people_path = fs.link_person_to_project(
+            "john-doe", "test-proj"
+        )
+
+        person_content = person_path.read_text(encoding="utf-8")
+        project_people = project_people_path.read_text(encoding="utf-8")
+
+        assert "[[test-proj]]" in person_content
+        assert "## ACME" in project_people
+        assert "@john-doe" in project_people
+
+    def test_unlink_person_from_project_removes_person(self, fs):
+        fs.scaffold_project("test-proj", make_meta())
+        fs.create_person("john-doe", "John Doe", extra_fields={"Company": "ACME"})
+        fs.link_person_to_project("john-doe", "test-proj")
+
+        fs.unlink_person_from_project("john-doe", "test-proj")
+
+        person_content = (fs.root / "_global" / "people" / "john-doe.md").read_text(
+            encoding="utf-8"
+        )
+        project_people = (fs.root / "projects" / "test-proj" / "people.md").read_text(
+            encoding="utf-8"
+        )
+
+        assert "[[test-proj]]" not in person_content
+        assert "@john-doe" not in project_people
+
+    def test_edit_person_notes_append(self, fs):
+        fs.create_person("john-doe", "John Doe")
+        path, warnings = fs.edit_person_notes(
+            "john-doe", "First manual note", mode="append"
+        )
+        content = path.read_text(encoding="utf-8")
+        assert "## Notes" in content
+        assert "First manual note" in content
+        assert warnings == []
+
+    def test_edit_person_notes_replace(self, fs):
+        fs.create_person("john-doe", "John Doe")
+        fs.edit_person_notes("john-doe", "Old note", mode="append")
+        path, _ = fs.edit_person_notes("john-doe", "Fresh note", mode="replace")
+        content = path.read_text(encoding="utf-8")
+        assert "Fresh note" in content
+        assert "Old note" not in content
 
 
 class TestStaleManifests:
@@ -532,6 +592,20 @@ class TestMCPTools:
         )
         assert "error" in r
 
+    def test_write_file_blocks_project_people(self, mcp_server):
+        self._call(
+            mcp_server, "create_project", slug="people-lock-proj", name="People Lock"
+        )
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "write_file",
+                path="projects/people-lock-proj/people.md",
+                content="manual edit",
+            )
+        )
+        assert "error" in r
+
     def test_append_to_file(self, mcp_server):
         self._call(mcp_server, "create_project", slug="app-proj", name="Append")
         r = parse_result(
@@ -652,6 +726,84 @@ class TestMCPTools:
         r = parse_result(self._call(mcp_server, "get_person", slug="get-person"))
         assert "error" not in r
         assert "Get Person" in r["result"]
+
+    def test_link_and_unlink_person_project(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="link-proj", name="Link Project")
+        self._call(
+            mcp_server,
+            "create_person",
+            slug="link-person",
+            name="Link Person",
+            company="Other",
+        )
+
+        linked = parse_result(
+            self._call(
+                mcp_server,
+                "link_person_to_project",
+                person_slug="link-person",
+                project_slug="link-proj",
+            )
+        )
+        assert "error" not in linked
+
+        people_file = parse_result(
+            self._call(mcp_server, "read_file", path="projects/link-proj/people.md")
+        )
+        assert "@link-person" in people_file["result"]
+
+        unlinked = parse_result(
+            self._call(
+                mcp_server,
+                "unlink_person_from_project",
+                person_slug="link-person",
+                project_slug="link-proj",
+            )
+        )
+        assert "error" not in unlinked
+
+        people_after = parse_result(
+            self._call(mcp_server, "read_file", path="projects/link-proj/people.md")
+        )
+        assert "@link-person" not in people_after["result"]
+
+    def test_edit_person_notes_tool(self, mcp_server):
+        self._call(
+            mcp_server, "create_person", slug="notes-person", name="Notes Person"
+        )
+
+        append_result = parse_result(
+            self._call(
+                mcp_server,
+                "edit_person_notes",
+                slug="notes-person",
+                notes="Manual note line 1",
+                mode="append",
+            )
+        )
+        assert "error" not in append_result
+
+        person_result = parse_result(
+            self._call(mcp_server, "get_person", slug="notes-person")
+        )
+        assert "Manual note line 1" in person_result["result"]
+
+        replace_result = parse_result(
+            self._call(
+                mcp_server,
+                "edit_person_notes",
+                slug="notes-person",
+                notes="Replaced note",
+                mode="replace",
+            )
+        )
+        assert "error" not in replace_result
+
+        person_result2 = parse_result(
+            self._call(mcp_server, "get_person", slug="notes-person")
+        )
+        assert "Replaced note" in person_result2["result"]
+        assert "Manual note line 1" not in person_result2["result"]
 
     def test_get_company(self, mcp_server):
         self._call(mcp_server, "create_company", slug="get-corp", name="Get Corp")

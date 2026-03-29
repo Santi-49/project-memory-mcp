@@ -46,6 +46,18 @@ Calling `read_file` on `_index.yaml` is also blocked — use `get_folder_manifes
 
 ---
 
+## Project `people.md` auto-management
+
+Each `projects/{slug}/people.md` file is auto-managed from global person-project relationships.
+Manual writes and deletes are blocked.
+
+- Use `link_person_to_project` and `unlink_person_from_project` to manage relationships.
+- Updating a linked person profile (for example, company change) automatically regenerates affected project `people.md` files.
+
+**Enforced by:** `is_project_people_file()` check in `write_file` and `soft_delete`
+
+---
+
 ## Knowledge frontmatter
 
 Any `.md` file written under a path that contains `knowledge/` must begin with a YAML frontmatter block delimited by `---`. The frontmatter is validated against `KnowledgeFrontmatter` (see `src/models.py`). Missing or invalid frontmatter produces a **warning** (not an error) — the file is still written.
@@ -102,6 +114,7 @@ The `updates/` folder uses a different convention: instead of tracking per-file 
 | Filenames must be kebab-case | `write_file`, `create_*` | Error |
 | `updates/` and `decisions.md` are append-only | `write_file` | Error |
 | `_index.yaml` is not directly writable or readable | `write_file`, `append_to_file`, `read_file` | Error |
+| `projects/{slug}/people.md` is auto-managed | `write_file`, `delete_file` | Error |
 | Knowledge entries require YAML frontmatter | `write_file` on `knowledge/*.md` | Warning |
 | Unresolved `@ref` tokens | `write_file`, `append_to_file` | Warning |
 | Unique project slugs | `create_project` | Error |
