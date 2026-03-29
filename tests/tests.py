@@ -3174,3 +3174,249 @@ class TestRagMCPTools:
     @pytest.fixture
     def mcp_server(self, tmp_path):
         return create_server(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# RAG backend selection and factory tests
+# ---------------------------------------------------------------------------
+
+from unittest.mock import MagicMock, patch
+
+from rag import (
+    RAGEngine,
+    RAG_BACKEND_TFIDF,
+    RAG_BACKEND_EMBEDDINGS,
+    DEFAULT_EMBEDDING_MODEL,
+    _TFIDFBackend,
+    _EmbeddingsBackend,
+)
+
+
+class TestRAGEngineBackendSelection:
+    def test_default_is_tfidf(self, tmp_path):
+        rag = RAGEngine(tmp_path)
+        assert rag.backend == RAG_BACKEND_TFIDF
+        assert isinstance(rag._impl, _TFIDFBackend)
+
+    def test_explicit_tfidf(self, tmp_path):
+        rag = RAGEngine(tmp_path, backend=RAG_BACKEND_TFIDF)
+        assert rag.backend == RAG_BACKEND_TFIDF
+        assert isinstance(rag._impl, _TFIDFBackend)
+
+    def test_embeddings_backend_type(self, tmp_path):
+        rag = RAGEngine(tmp_path, backend=RAG_BACKEND_EMBEDDINGS)
+        assert rag.backend == RAG_BACKEND_EMBEDDINGS
+        assert isinstance(rag._impl, _EmbeddingsBackend)
+
+    def test_invalid_backend_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="Unknown RAG backend"):
+            RAGEngine(tmp_path, backend="unknown-backend")
+
+    def test_embedding_model_propagated(self, tmp_path):
+        model_name = "paraphrase-MiniLM-L3-v2"
+        rag = RAGEngine(tmp_path, backend=RAG_BACKEND_EMBEDDINGS, embedding_model=model_name)
+        assert rag._impl.model_name == model_name
+
+    def test_tfidf_uses_separate_index_file(self, tmp_path):
+        rag = RAGEngine(tmp_path, backend=RAG_BACKEND_TFIDF)
+        (tmp_path / "doc.md").write_text("some content here text", encoding="utf-8")
+        rag.rebuild()
+        assert (tmp_path / "_rag_index.json").exists()
+        assert not (tmp_path / "_rag_embeddings.json").exists()
+
+
+class TestEmbeddingsBackendWithMock:
+    """Test _EmbeddingsBackend using a mocked sentence-transformers model."""
+
+    @pytest.fixture(autouse=True)
+    def require_numpy(self):
+        pytest.importorskip("numpy", reason="numpy required for embeddings backend tests")
+
+    def _make_mock_model(self, dim: int = 8):
+        """Return a mock SentenceTransformer that encodes text to a fixed-dim vector."""
+        import numpy as np
+
+        mock = MagicMock()
+        # Each call to encode returns a different vector seeded by the text hash
+        def encode_side_effect(text, convert_to_numpy=True):
+            rng = np.random.RandomState(hash(text) % (2**31))
+            vec = rng.randn(dim).astype(float)
+            return vec / (np.linalg.norm(vec) + 1e-10)
+
+        mock.encode.side_effect = encode_side_effect
+        return mock
+
+    def _patch_model(self, backend: _EmbeddingsBackend, mock_model):
+        """Inject a mock model into an already-constructed backend."""
+        backend._model = mock_model
+
+    def test_index_file_indexed(self, tmp_path):
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        f = tmp_path / "auth.md"
+        f.write_text("JWT authentication tokens OAuth", encoding="utf-8")
+        assert backend.index_file(f) == "indexed"
+        assert backend.indexed_count() == 1
+
+    def test_index_file_skipped_unchanged(self, tmp_path):
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        f = tmp_path / "note.md"
+        f.write_text("Some content here", encoding="utf-8")
+        backend.index_file(f)
+        assert backend.index_file(f) == "skipped"
+
+    def test_search_returns_results(self, tmp_path):
+        import numpy as np
+
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+
+        (tmp_path / "auth.md").write_text("JWT tokens authentication", encoding="utf-8")
+        (tmp_path / "deploy.md").write_text("Docker containers deployment pipeline", encoding="utf-8")
+        backend.rebuild()
+
+        results = backend.search("authentication security tokens")
+        assert isinstance(results, list)
+        # All results have required keys
+        for r in results:
+            assert "path" in r
+            assert "score" in r
+            assert "indexed_at" in r
+
+    def test_search_project_slug_filter(self, tmp_path):
+        proj = tmp_path / "projects" / "my-proj"
+        proj.mkdir(parents=True)
+        (proj / "design.md").write_text("system design architecture", encoding="utf-8")
+        (tmp_path / "other.md").write_text("system design architecture", encoding="utf-8")
+
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        backend.rebuild()
+
+        results = backend.search("system design", project_slug="my-proj")
+        assert all(r["path"].startswith("projects/my-proj/") for r in results)
+
+    def test_rebuild_counts(self, tmp_path):
+        (tmp_path / "a.md").write_text("alpha beta gamma", encoding="utf-8")
+        (tmp_path / "b.md").write_text("epsilon zeta eta", encoding="utf-8")
+
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        counts = backend.rebuild()
+        assert counts["indexed"] == 2
+
+        counts2 = backend.rebuild()
+        assert counts2["skipped"] == 2
+
+    def test_persistence_and_reload(self, tmp_path):
+        f = tmp_path / "data.md"
+        f.write_text("persistent data content here", encoding="utf-8")
+        mock_model = self._make_mock_model()
+
+        backend1 = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend1, mock_model)
+        backend1.index_file(f)
+        assert backend1.indexed_count() == 1
+
+        # Second backend should load from disk
+        backend2 = _EmbeddingsBackend(tmp_path)
+        assert backend2.indexed_count() == 1
+
+    def test_model_change_clears_index(self, tmp_path):
+        f = tmp_path / "doc.md"
+        f.write_text("some content here", encoding="utf-8")
+
+        backend1 = _EmbeddingsBackend(tmp_path, model_name="model-a")
+        self._patch_model(backend1, self._make_mock_model())
+        backend1.index_file(f)
+        assert backend1.indexed_count() == 1
+
+        # Different model name → index should be discarded
+        backend2 = _EmbeddingsBackend(tmp_path, model_name="model-b")
+        assert backend2.indexed_count() == 0
+
+    def test_remove_file(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("important notes here", encoding="utf-8")
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        backend.index_file(f)
+        assert backend.indexed_count() == 1
+        backend.remove_file(f)
+        assert backend.indexed_count() == 0
+
+    def test_get_stale_files(self, tmp_path):
+        import time
+
+        f = tmp_path / "note.md"
+        f.write_text("original text here", encoding="utf-8")
+        backend = _EmbeddingsBackend(tmp_path)
+        self._patch_model(backend, self._make_mock_model())
+        backend.index_file(f)
+        assert backend.get_stale_files() == []
+
+        time.sleep(_MTIME_SLEEP)
+        f.write_text("modified text here", encoding="utf-8")
+        stale = backend.get_stale_files()
+        assert len(stale) == 1
+
+    def test_missing_package_raises_import_error(self, tmp_path):
+        """_EmbeddingsBackend raises ImportError when sentence-transformers is absent."""
+        # Only meaningful when sentence-transformers is NOT installed
+        try:
+            import sentence_transformers  # noqa: F401
+            pytest.skip("sentence-transformers is installed; test requires it to be absent")
+        except ImportError:
+            pass
+        backend = _EmbeddingsBackend(tmp_path)
+        with pytest.raises(ImportError, match="sentence-transformers"):
+            backend._get_model()
+
+
+class TestCreateServerRAGParams:
+    """Test that create_server propagates rag_backend / embedding_model correctly."""
+
+    def _call(self, server, tool_name: str, **kwargs):
+        import asyncio
+
+        return asyncio.run(server.call_tool(tool_name, kwargs))
+
+    def test_default_backend_is_tfidf(self, tmp_path):
+        server = create_server(tmp_path)
+        r = parse_result(self._call(server, "rebuild_rag_index"))
+        assert "error" not in r
+        assert r["result"]["backend"] == RAG_BACKEND_TFIDF
+
+    def test_tfidf_backend_explicit(self, tmp_path):
+        server = create_server(tmp_path, rag_backend=RAG_BACKEND_TFIDF)
+        r = parse_result(self._call(server, "rebuild_rag_index"))
+        assert "error" not in r
+        assert r["result"]["backend"] == RAG_BACKEND_TFIDF
+
+    def test_invalid_backend_raises_at_server_creation(self, tmp_path):
+        with pytest.raises(ValueError, match="Unknown RAG backend"):
+            create_server(tmp_path, rag_backend="bad-backend")
+
+    def test_semantic_search_reports_backend(self, tmp_path):
+        server = create_server(tmp_path, rag_backend=RAG_BACKEND_TFIDF)
+        r = parse_result(self._call(server, "semantic_search", query="test query"))
+        assert "error" not in r
+        assert r["backend"] == RAG_BACKEND_TFIDF
+
+    def test_embeddings_backend_uses_separate_index(self, tmp_path):
+        """Embeddings backend writes _rag_embeddings.json, not _rag_index.json."""
+        pytest.importorskip("numpy", reason="numpy required")
+        sentence_transformers = pytest.importorskip(
+            "sentence_transformers", reason="sentence-transformers required"
+        )
+        server = create_server(tmp_path, rag_backend=RAG_BACKEND_EMBEDDINGS)
+        self._call(server, "create_project", slug="emb-proj", name="Emb")
+        self._call(
+            server,
+            "write_file",
+            path="projects/emb-proj/doc.md",
+            content="# Doc\n\nEmbedding backend test content.",
+        )
+        assert (tmp_path / "_rag_embeddings.json").exists()
+        assert not (tmp_path / "_rag_index.json").exists()
