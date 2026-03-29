@@ -18,6 +18,7 @@ import fastmcp
 
 from filesystem import (
     MemoryFS,
+    is_index_yaml,
     is_manifest,
     is_sync_yaml,
     to_kebab_case,
@@ -172,7 +173,7 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         """Read a file.  Blocks direct reads of _index.yaml (use get_folder_manifest) and _sync.yaml (use get_sync_state)."""
         try:
             abs_path = fs._safe_path(path)
-            if abs_path.name.lower() == "_index.yaml":
+            if is_index_yaml(abs_path):
                 return {
                     "error": (
                         "_index.yaml should not be read directly. "

@@ -113,6 +113,11 @@ def is_manifest(path: Path) -> bool:
     return path.name.lower() in ("_index.yaml", "_sync.yaml")
 
 
+def is_index_yaml(path: Path) -> bool:
+    """Return True if path is a _index.yaml file."""
+    return path.name.lower() == "_index.yaml"
+
+
 def is_sync_yaml(path: Path) -> bool:
     """Return True if path is a _sync.yaml file."""
     return path.name.lower() == "_sync.yaml"
@@ -1634,17 +1639,10 @@ class MemoryFS:
 
         frequency: "daily" | "weekly" | None (all overdue)
         """
+        from datetime import timedelta
+
         now = datetime.now(timezone.utc)
         today_cutoff = now.replace(hour=6, minute=0, second=0, microsecond=0)
-        seven_days_ago = now.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ).replace(
-            day=now.day - 7
-            if now.day > 7
-            else now.day
-        )
-        # Use timedelta for robustness
-        from datetime import timedelta
         seven_days_ago = now - timedelta(days=7)
 
         results: list[dict[str, Any]] = []
