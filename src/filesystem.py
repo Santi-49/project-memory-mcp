@@ -87,6 +87,19 @@ def to_kebab_case(name: str) -> str:
     return result
 
 
+def normalize_newlines(content: str) -> str:
+    """Normalize escape sequence newlines to actual newlines.
+
+    Converts literal \\n, \\r\\n, \\r to actual newline characters.
+    This prevents content from being written with escaped sequences.
+    """
+    # Replace escaped sequences with actual newlines
+    content = content.replace("\\r\\n", "\n")
+    content = content.replace("\\n", "\n")
+    content = content.replace("\\r", "\n")
+    return content
+
+
 def validate_date(s: str) -> bool:
     """Return True if s is a valid YYYY-MM-DD date string."""
     if not _DATE_RE.match(s):
@@ -923,7 +936,8 @@ class MemoryFS:
 
         # Write file
         abs_path.parent.mkdir(parents=True, exist_ok=True)
-        abs_path.write_text(content, encoding="utf-8")
+        normalized_content = normalize_newlines(content)
+        abs_path.write_text(normalized_content, encoding="utf-8")
 
         # Update refs
         rel_path = self._rel(abs_path)
@@ -966,8 +980,9 @@ class MemoryFS:
             )
 
         abs_path.parent.mkdir(parents=True, exist_ok=True)
+        normalized_content = normalize_newlines(content)
         with abs_path.open("a", encoding="utf-8") as f:
-            f.write(content)
+            f.write(normalized_content)
 
         # Update refs on full file
         full_content = abs_path.read_text(encoding="utf-8")
