@@ -9,12 +9,18 @@ All tools return {"result": ..., "warnings": [...]} or {"error": "...", "warning
 from __future__ import annotations
 
 import argparse
+import os
+import secrets
 import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
 import fastmcp
+from dotenv import load_dotenv
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from filesystem import (
     MemoryFS,
@@ -39,6 +45,37 @@ from models import (
     ProjectType,
 )
 from templates import KNOWLEDGE_ENTRY_TEMPLATE
+
+# ---------------------------------------------------------------------------
+# Bearer-token auth middleware
+# ---------------------------------------------------------------------------
+
+
+class BearerTokenMiddleware(BaseHTTPMiddleware):
+    """ASGI middleware that enforces Bearer-token authentication."""
+
+    def __init__(self, app, token: str) -> None:
+        if not token:
+            raise ValueError("BearerTokenMiddleware requires a non-empty token")
+        super().__init__(app)
+        self._token = token
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        auth_header = request.headers.get("Authorization", "")
+        authenticated = False
+        if auth_header.startswith("Bearer "):
+            provided = auth_header[7:]
+            authenticated = secrets.compare_digest(provided, self._token)
+
+        if not authenticated:
+            return Response(
+                content="Unauthorized",
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer realm="Project Memory MCP"'},
+            )
+
+        return await call_next(request)
+
 
 # ---------------------------------------------------------------------------
 # Server factory
@@ -1057,6 +1094,9 @@ def create_server(root: Path) -> fastmcp.FastMCP:
 
 
 def main() -> None:
+    # Load .env from the working directory (silently ignored if absent).
+    load_dotenv()
+
     parser = argparse.ArgumentParser(
         description="Project Memory MCP Server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1064,6 +1104,7 @@ def main() -> None:
 Examples:
   python server.py --root ./my-memory
   python server.py --root /home/user/project-memory --transport stdio
+  python server.py --root ./my-memory --transport http --host 0.0.0.0 --port 8000
 """,
     )
     parser.add_argument(
@@ -1094,7 +1135,25 @@ Examples:
     server = create_server(args.root)
 
     if args.transport == "http":
-        server.run(transport="streamable-http", host=args.host, port=args.port)
+        auth_token = os.environ.get("AUTH_TOKEN", "").strip()
+
+        if auth_token:
+            from starlette.middleware import Middleware
+
+            http_middleware = [
+                Middleware(BearerTokenMiddleware, token=auth_token)
+            ]
+            print("[auth] Bearer token auth enabled")
+        else:
+            http_middleware = None
+            print("[auth] WARNING: No AUTH_TOKEN set — HTTP transport is unprotected!")
+
+        server.run(
+            transport="streamable-http",
+            host=args.host,
+            port=args.port,
+            middleware=http_middleware,
+        )
     else:
         server.run(transport="stdio")
 
