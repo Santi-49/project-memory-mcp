@@ -70,8 +70,31 @@ Call `create_project` with these parameters:
 The server will auto-create:
 - `projects/{slug}/` directory structure
 - `projects/{slug}/_meta.yaml` with your metadata
+- `projects/{slug}/_instructions.md` with LLM behavior template
 - `projects/{slug}/_index.yaml` (empty manifest)
 - Subdirectories: `correspondence/`, `docs/`, `knowledge/`, `notes/`, `updates/`
+
+### Step 2b — Set up project instructions (optional)
+
+If you have LLM-specific behavior rules, MCP connector requirements, or project conventions
+that should apply to this project, edit `_instructions.md` now.
+
+You should prompt the user if it wants any specific innstructions on MRP ussage or wich of the following options it wants.
+
+**Option A: Start with the template**
+1. Call `get_project_context` to retrieve the scaffolded `_instructions.md`
+2. Edit each section:
+   - **LLM Behavior Rules** — e.g., "Use technical terminology from the domain," "Always cite sources"
+   - **MCP Connector Usage** — e.g., "Use [mcp:github/...] for code references", "Use [mcp:jira/...] for issue links"
+   - **Project Conventions** — e.g., "File naming: kebab-case", "Decisions require 48h stakeholder review"
+3. Call `write_file` with path `projects/{slug}/_instructions.md` and your custom content
+
+**Option B: Copy from another project** (if similar)
+1. Call `get_project_context` on the source project slug to retrieve its `_instructions.md`
+2. Modify as needed for this new project
+3. Call `write_file` with the customized content
+
+You can also leave the default template as-is and update instructions later.
 
 ### Step 3 — Edit project metadata
 

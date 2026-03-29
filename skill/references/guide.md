@@ -36,6 +36,7 @@ Legend:
 ```
 projects/{slug}/
 ├── _status.md          [human]  Always-current status — first loaded in get_project_context
+├── _instructions.md    [human]  Custom LLM behavior rules, MCP connectors, conventions
 ├── _guide.md           [human]  Folder structure reference table
 ├── _index.yaml         [auto]   Folder manifest with read_when hints per file
 ├── _meta.yaml          [human]  Project metadata
@@ -55,6 +56,7 @@ Use this decision table when choosing where new information belongs.
 | Need | Write to |
 |---|---|
 | Current status and immediate next step | `_status.md` |
+| Custom LLM behavior or MCP connector rules | `_instructions.md` |
 | Metadata and ownership fields | `_meta.yaml` |
 | Durable decision and rationale | `decisions.md` (append-only) |
 | Processed reusable knowledge | `knowledge/{topic}.md` (with frontmatter) |
@@ -83,8 +85,9 @@ If unsure between folders:
 | `delete_file` | path | Soft-delete a file (move to `_trash/`). Removes manifest entry |
 | `delete_project` | slug, confirm | Soft-delete an entire project. Must set `confirm=true` |
 | `get_folder_manifest` | folder_path | Read `_index.yaml` for a folder and render as formatted text |
-| `get_project_context` | slug | Return project context |
+| `get_project_context` | slug | Return project context (includes `_instructions.md`) |
 | `get_refs_for` | ref | Return all files that mention `@ref`, `#tag`, or `[[link]]` |
+| `resolve_mcp_ref` | ref, project_slug?(opt) | Resolve a generic MCP reference token; return files that reference that MCP server |
 | `get_related_files` | path | Return bidirectional cross-reference map for a file |
 | `get_sync_state` | project_slug | Read `_sync.yaml` for a project |
 | `list_projects` | status, type, tags | List all projects, optionally filtered |
@@ -142,7 +145,7 @@ updated: YYYY-MM-DD
 
 ### knowledge/ frontmatter (required on every knowledge entry)
 ```yaml
-source: str | [str] | null   # M365 ref, [mem:] path, plain text, or list
+source: str | [str] | null   # M365 ref, [mem:] path, [mcp:] ref, or list
 processed: YYYY-MM-DD
 method: manual | summary | extract
 model: str

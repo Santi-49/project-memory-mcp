@@ -88,6 +88,9 @@ def generate_guide(mcp: "fastmcp.FastMCP", root: Path) -> str:
 def generate_m365_guide(mcp: "fastmcp.FastMCP", root: Path) -> str:
     """Read and return the M365 guide from skill/references/m365-guide.md.
 
+    Appends a dynamically generated source registry showing M365 sources currently
+    registered across all projects.
+
     The M365 guide is the single source of truth for M365 integration documentation.
     To update it, edit skill/references/m365-guide.md directly.
 
@@ -98,16 +101,77 @@ def generate_m365_guide(mcp: "fastmcp.FastMCP", root: Path) -> str:
         skill_dir = Path(__file__).parent.parent / "skill" / "references"
         m365_file = skill_dir / "m365-guide.md"
 
+        guide_content = ""
         if m365_file.exists():
-            return m365_file.read_text(encoding="utf-8")
+            guide_content = m365_file.read_text(encoding="utf-8")
+        else:
+            guide_content = (
+                f"# Project Memory — M365 Integration Guide\n\n"
+                f"_Could not load skill/references/m365-guide.md_\n\n"
+                f"The M365 guide file should be present in skill/references/ directory.\n"
+                f"Use get_sync_state to check M365 configuration for a specific project."
+            )
 
-        # Fallback if file not found
-        return (
-            f"# Project Memory — M365 Integration Guide\n\n"
-            f"_Could not load skill/references/m365-guide.md_\n\n"
-            f"The M365 guide file should be present in skill/references/ directory.\n"
-            f"Use get_sync_state to check M365 configuration for a specific project."
-        )
+        # Append dynamic source registry
+        guide_content += "\n\n---\n\n## Registered M365 Sources (Live)\n\n"
+
+        # Scan all projects for M365 sources
+        from filesystem import MemoryFS
+
+        fs = MemoryFS(root)
+        projects_index = fs.load_projects_index()
+
+        has_sources = False
+        for project_entry in projects_index.projects:
+            sync_yaml_path = root / "projects" / project_entry.slug / "_sync.yaml"
+            if sync_yaml_path.exists():
+                try:
+                    import yaml
+
+                    sync_data = yaml.safe_load(
+                        sync_yaml_path.read_text(encoding="utf-8")
+                    )
+                    if sync_data and sync_data.get("sources"):
+                        has_sources = True
+                        guide_content += (
+                            f"\n### {project_entry.name} (`{project_entry.slug}`)\n\n"
+                        )
+                        sources = sync_data["sources"]
+
+                        if sources.get("teams"):
+                            guide_content += "**Teams sources:**\n"
+                            for src in sources["teams"]:
+                                guide_content += (
+                                    f"- `{src.get('id')}`: {src.get('label')}\n"
+                                )
+                            guide_content += "\n"
+
+                        if sources.get("outlook"):
+                            guide_content += "**Outlook sources:**\n"
+                            for src in sources["outlook"]:
+                                guide_content += (
+                                    f"- `{src.get('id')}`: {src.get('label')}\n"
+                                )
+                            guide_content += "\n"
+
+                        if sources.get("sharepoint"):
+                            guide_content += "**SharePoint sources:**\n"
+                            for src in sources["sharepoint"]:
+                                guide_content += (
+                                    f"- `{src.get('id')}`: {src.get('label')}\n"
+                                )
+                            guide_content += "\n"
+                except Exception:
+                    pass
+
+        if not has_sources:
+            guide_content += (
+                "No M365 sources registered yet.\n\n"
+                "Use `add_sync_source` to register your first source."
+            )
+
+        return guide_content
+
     except Exception as exc:  # pragma: no cover
         return (
             f"# Project Memory — M365 Integration Guide\n\n"

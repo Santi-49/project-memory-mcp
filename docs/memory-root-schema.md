@@ -32,6 +32,7 @@ memory-root/
 ```
 projects/{slug}/
 ├── _status.md          ← Always-current human-written status (first loaded in context)
+├── _instructions.md    ← Custom LLM behavior rules and MCP connector usage
 ├── _guide.md           ← Static folder structure table (human-editable)
 ├── _index.yaml         ← Auto-managed manifest for this directory
 ├── _meta.yaml          ← Project metadata (auto-populated, human-editable after creation)
@@ -105,6 +106,15 @@ tags: []
 created: "2025-01-15"     # YYYY-MM-DD, never changes
 updated: "2025-03-28"     # YYYY-MM-DD, updated on human edits
 ```
+
+### `_instructions.md` (project-specific LLM instructions)
+
+Human-editable. Scaffolded with a template containing sections for:
+- **LLM Behavior Rules** — Define how the LLM should behave on this project (tone, language, formatting, terminology)
+- **MCP Connector Usage** — Document how available MCP servers should be used (e.g., `[mcp:github/...]`, `[mcp:jira/...]`)
+- **Project Conventions** — Project-specific naming, structure, and workflow conventions
+
+This file is loaded early in every `get_project_context` call, making it your primary mechanism for customizing LLM behavior per-project.
 
 ### `_status.md` (current project status)
 

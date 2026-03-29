@@ -2,6 +2,7 @@ fastmcp>=2.0.0
 pyyaml>=6.0
 pydantic>=2.0
 pytest>=7.0
+python-dotenv>=1.0
 
 # Optional: required only when using --rag-backend=embeddings
 # sentence-transformers>=2.0

@@ -18,10 +18,12 @@ All tokens are parsed and indexed on every write.
 | `[sp:source-id/path]` | SharePoint document (requires registered source) |
 | `[tm:source-id/message-id]` | Teams message (requires registered source) |
 | `[ol:source-id/message-id]` | Outlook email (requires registered source) |
+| `[mcp:server-name/resource-path]` | Generic MCP resource (no registration required) |
 
 **Notes:**
 - `source-id` is the `id` field from `_sync.yaml` sources, not raw M365 IDs
 - **All M365 tokens require source registration via `add_sync_source` first**
+- **Generic MCP tokens (`[mcp:...]`) require NO registration** — they are lightweight advisory references
 - Unresolved `@refs` and `[mem:]` refs produce warnings (file still written)
 - Multiple sources in `knowledge/` frontmatter:
   ```yaml
