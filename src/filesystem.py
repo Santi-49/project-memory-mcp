@@ -21,6 +21,8 @@ from models import (
     ManifestEntry,
     ProjectIndexEntry,
     ProjectMeta,
+    ProjectStatus,
+    ProjectType,
     ProjectsIndex,
     RefsIndex,
     RefsIndexEntry,
@@ -579,6 +581,95 @@ class MemoryFS:
 
         return project_dir
 
+    def update_project(
+        self,
+        slug: str,
+        name: Optional[str] = None,
+        status: Optional[str] = None,
+        type: Optional[str] = None,
+        meta: Optional[dict[str, Any]] = None,
+    ) -> ProjectMeta:
+        project_dir = self.root / "projects" / slug
+        if not project_dir.exists():
+            raise FileNotFoundError(f"Project {slug!r} not found")
+
+        meta_path = project_dir / "_meta.yaml"
+        if not meta_path.exists():
+            raise FileNotFoundError(f"_meta.yaml missing for project {slug!r}")
+
+        raw = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+        
+        if name is not None:
+            raw["name"] = name
+        if status is not None:
+            raw["status"] = ProjectStatus(status).value
+        if type is not None:
+            raw["type"] = ProjectType(type).value
+        
+        if meta is not None:
+            if "company" in meta: raw["company"] = meta["company"]
+            if "owner" in meta: raw["owner"] = meta["owner"]
+            if "team" in meta: raw["team"] = meta["team"]
+            if "tags" in meta: raw["tags"] = meta["tags"]
+
+        raw["updated"] = _today()
+
+        meta_content = PROJECT_META_TEMPLATE.format(**raw)
+        meta_path.write_text(meta_content, encoding="utf-8")
+
+        root_manifest = self._load_root_manifest()
+        for p in root_manifest.projects:
+            if p.slug == slug:
+                if name is not None: p.name = name
+                if status is not None: p.status = raw["status"]
+                if type is not None: p.type = raw["type"]
+                p.updated = raw["updated"]
+                break
+        root_manifest.last_updated = _today()
+        self._save_root_manifest(root_manifest)
+
+        pi = self.load_projects_index()
+        for p in pi.projects:
+            if p.slug == slug:
+                if name is not None: p.name = name
+                if status is not None: p.status = raw["status"]
+                if type is not None: p.type = raw["type"]
+                if "tags" in raw: p.tags = raw.get("tags", [])
+                p.updated = raw["updated"]
+                break
+        self.save_projects_index(pi)
+
+        return ProjectMeta(**raw)
+
+    def delete_project(self, slug: str) -> str:
+        project_dir = self.root / "projects" / slug
+        if not project_dir.exists():
+            raise FileNotFoundError(f"Project {slug!r} not found")
+
+        trash_dir = self.root / "_trash"
+        trash_dir.mkdir(exist_ok=True)
+        dest_name = f"{_now_ts()}_project_{slug}"
+        dest = trash_dir / dest_name
+        shutil.move(str(project_dir), str(dest))
+
+        root_manifest = self._load_root_manifest()
+        root_manifest.projects = [p for p in root_manifest.projects if p.slug != slug]
+        root_manifest.last_updated = _today()
+        self._save_root_manifest(root_manifest)
+
+        pi = self.load_projects_index()
+        pi.projects = [p for p in pi.projects if p.slug != slug]
+        self.save_projects_index(pi)
+
+        refs_index = self.load_refs_index()
+        prefix = f"projects/{slug}/"
+        keys_to_remove = [k for k in refs_index.entries.keys() if k.startswith(prefix)]
+        for k in keys_to_remove:
+            del refs_index.entries[k]
+        self.save_refs_index(refs_index)
+
+        return str(dest.relative_to(self.root))
+
     # ------------------------------------------------------------------
     # File I/O
     # ------------------------------------------------------------------
@@ -854,6 +945,74 @@ class MemoryFS:
                 read_when="When researching this company's context.",
             ),
         )
+        return path
+
+    def update_person(
+        self,
+        slug: str,
+        name: Optional[str] = None,
+        extra_fields: Optional[dict[str, Any]] = None,
+        description: Optional[str] = None,
+    ) -> Path:
+        folder = self.root / "_global" / "people"
+        path = folder / f"{slug}.md"
+        if not path.exists():
+            raise FileNotFoundError(f"Person {slug!r} not found")
+
+        content = path.read_text(encoding="utf-8")
+        
+        if name is not None:
+            content = re.sub(r"^# .*", f"# {name}", content, count=1, flags=re.MULTILINE)
+
+        if extra_fields:
+            for field_name, field_value in extra_fields.items():
+                placeholder_pattern = rf"^\*\*{field_name}:\*\*.*$"
+                new_line = f"**{field_name}:** {field_value}"
+                
+                if re.search(placeholder_pattern, content, flags=re.MULTILINE):
+                    content = re.sub(placeholder_pattern, new_line, content, count=1, flags=re.MULTILINE)
+                else:
+                    content = re.sub(r"^(# .*)$", r"\1\n\n" + new_line, content, count=1, flags=re.MULTILINE)
+
+        path.write_text(content, encoding="utf-8")
+        
+        if description is not None:
+            self.update_manifest_entry(folder, f"{slug}.md", description=description)
+
+        return path
+
+    def update_company(
+        self,
+        slug: str,
+        name: Optional[str] = None,
+        extra_fields: Optional[dict[str, Any]] = None,
+        description: Optional[str] = None,
+    ) -> Path:
+        folder = self.root / "_global" / "companies"
+        path = folder / f"{slug}.md"
+        if not path.exists():
+            raise FileNotFoundError(f"Company {slug!r} not found")
+
+        content = path.read_text(encoding="utf-8")
+        
+        if name is not None:
+            content = re.sub(r"^# .*", f"# {name}", content, count=1, flags=re.MULTILINE)
+
+        if extra_fields:
+            for field_name, field_value in extra_fields.items():
+                placeholder_pattern = rf"^\*\*{field_name}:\*\*.*$"
+                new_line = f"**{field_name}:** {field_value}"
+                
+                if re.search(placeholder_pattern, content, flags=re.MULTILINE):
+                    content = re.sub(placeholder_pattern, new_line, content, count=1, flags=re.MULTILINE)
+                else:
+                    content = re.sub(r"^(# .*)$", r"\1\n\n" + new_line, content, count=1, flags=re.MULTILINE)
+
+        path.write_text(content, encoding="utf-8")
+        
+        if description is not None:
+            self.update_manifest_entry(folder, f"{slug}.md", description=description)
+
         return path
 
     # ------------------------------------------------------------------

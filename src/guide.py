@@ -96,6 +96,7 @@ _SECTION_FS_RULES = """\
 
 Rule                                    Trigger                         Severity
 ──────────────────────────────────────  ──────────────────────────────  ────────
+Destructive operations (delete, etc)    delete_project                  Ask User First
 Path must stay inside memory root       Any path argument               Error
 Filenames must be kebab-case            write_file, create_*            Error
 updates/ and decisions.md append-only   write_file (use append instead) Error
@@ -119,6 +120,8 @@ Enforcement details:       docs/filesystem-rules.md"""
 _GLOBAL_ENTITY_TOOLS: frozenset[str] = frozenset({
     "create_person",
     "create_company",
+    "update_person",
+    "update_company",
     "get_person",
     "get_company",
     "list_global_people",

@@ -257,6 +257,65 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             return {"error": str(e), "warnings": []}
 
     @mcp.tool
+    def update_project(
+        slug: str,
+        name: Optional[str] = None,
+        status: Optional[str] = None,
+        type: Optional[str] = None,
+        meta: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Update a project's metadata (status, type, name, tags, etc)."""
+        try:
+            if status is not None:
+                try:
+                    ProjectStatus(status)
+                except ValueError:
+                    valid = [s.value for s in ProjectStatus]
+                    return {"error": f"Invalid status {status!r}. Must be one of: {valid}", "warnings": []}
+
+            if type is not None:
+                try:
+                    ProjectType(type)
+                except ValueError:
+                    valid = [t.value for t in ProjectType]
+                    return {"error": f"Invalid type {type!r}. Must be one of: {valid}", "warnings": []}
+
+            updated = fs.update_project(slug, name=name, status=status, type=type, meta=meta)
+
+            return {
+                "result": {
+                    "slug": slug,
+                    "message": f"Project {slug!r} updated",
+                    "meta": updated.model_dump(),
+                },
+                "warnings": [],
+            }
+        except FileNotFoundError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def delete_project(slug: str, confirm: bool = False) -> dict[str, Any]:
+        """Soft-delete an entire project. Must set confirm=true."""
+        try:
+            if not confirm:
+                return {
+                    "error": "Destructive operation. You must ask the user for permission and then set confirm=true.",
+                    "warnings": [],
+                }
+            
+            trash_path = fs.delete_project(slug)
+            return {
+                "result": f"Project {slug!r} moved to trash: {trash_path}",
+                "warnings": [],
+            }
+        except FileNotFoundError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
     def create_knowledge_entry(
         project_slug: str,
         topic: str,
@@ -491,6 +550,64 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                 "warnings": [],
             }
         except ValueError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def update_person(
+        slug: str,
+        name: Optional[str] = None,
+        title: Optional[str] = None,
+        company: Optional[str] = None,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Update structured fields for an existing person file."""
+        try:
+            extra: dict[str, Any] = {}
+            if title is not None: extra["Title"] = title
+            if company is not None: extra["Company"] = company
+            if email is not None: extra["Email"] = email
+            if phone is not None: extra["Phone"] = phone
+
+            path = fs.update_person(slug, name=name, extra_fields=extra or None, description=description)
+            return {
+                "result": {
+                    "path": fs._rel(path),
+                    "message": f"Person {slug!r} updated",
+                },
+                "warnings": [],
+            }
+        except FileNotFoundError as e:
+            return {"error": str(e), "warnings": []}
+        except Exception as e:
+            return {"error": str(e), "warnings": []}
+
+    @mcp.tool
+    def update_company(
+        slug: str,
+        name: Optional[str] = None,
+        industry: Optional[str] = None,
+        website: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Update structured fields for an existing company file."""
+        try:
+            extra: dict[str, Any] = {}
+            if industry is not None: extra["Industry"] = industry
+            if website is not None: extra["Website"] = website
+
+            path = fs.update_company(slug, name=name, extra_fields=extra or None, description=description)
+            return {
+                "result": {
+                    "path": fs._rel(path),
+                    "message": f"Company {slug!r} updated",
+                },
+                "warnings": [],
+            }
+        except FileNotFoundError as e:
             return {"error": str(e), "warnings": []}
         except Exception as e:
             return {"error": str(e), "warnings": []}

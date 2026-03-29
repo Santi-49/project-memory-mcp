@@ -9,3 +9,4 @@ test-memory/
 dist/
 build/
 .env
+sim/*
