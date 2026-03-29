@@ -297,6 +297,8 @@ No parameters. Use this when the refs index has drifted out of sync — for exam
 
 Create a global person profile in `_global/people/{slug}.md` and update the people manifest.
 
+Before creating, call `list_global_people` first (and optionally `list_global_companies` / `resolve_ref`) to avoid duplicate entities.
+
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `slug` | string | yes | Kebab-case identifier (must be unique within people) |
@@ -306,6 +308,7 @@ Create a global person profile in `_global/people/{slug}.md` and update the peop
 | `email` | string | no | Email address |
 | `phone` | string | no | Phone number |
 | `global_description` | string | no | Editable global description field inside the person profile |
+| `project_slug` | string | no | Existing project slug; if provided, links person to that project after creation |
 | `description` | string | no | One-line description written to manifest entry |
 
 The person file keeps a canonical `## Projects` section that is managed by relationship tools.
@@ -376,6 +379,8 @@ The tool updates the person file and refreshes refs indexing for note content.
 ### `create_company`
 
 Create a company profile in `_global/companies/{slug}.md` and update the companies manifest.
+
+Before creating, call `list_global_companies` first (and optionally `list_global_people` / `resolve_ref`) to avoid duplicate entities.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

@@ -709,6 +709,26 @@ class TestMCPTools:
         assert "error" not in r
         assert "Jane Smith" in r["result"]["message"]
 
+    def test_create_person_with_project_slug_links_person(self, mcp_server):
+        self._call(mcp_server, "create_project", slug="cp-link-proj", name="CP Link")
+        r = parse_result(
+            self._call(
+                mcp_server,
+                "create_person",
+                slug="cp-link-person",
+                name="CP Link Person",
+                company="Other",
+                project_slug="cp-link-proj",
+            )
+        )
+        assert "error" not in r
+        assert r["result"]["linked_project"] == "cp-link-proj"
+
+        people_file = parse_result(
+            self._call(mcp_server, "read_file", path="projects/cp-link-proj/people.md")
+        )
+        assert "@cp-link-person" in people_file["result"]
+
     def test_create_company(self, mcp_server):
         r = parse_result(
             self._call(

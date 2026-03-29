@@ -536,9 +536,15 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         email: Optional[str] = None,
         phone: Optional[str] = None,
         global_description: Optional[str] = None,
+        project_slug: Optional[str] = None,
         description: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Create a global person profile and update _global/people/_index.yaml."""
+        """Create a global person profile and update _global/people/_index.yaml.
+
+        Before creating, check existing entities first with list_global_people
+        (and optionally list_global_companies / resolve_ref) to avoid duplicates.
+        Optionally set project_slug to link the new person to an existing project.
+        """
         try:
             kebab = to_kebab_case(slug)
             if kebab != slug:
@@ -546,6 +552,21 @@ def create_server(root: Path) -> fastmcp.FastMCP:
                     "error": f"Slug must be kebab-case. Got {slug!r}, expected {kebab!r}",
                     "warnings": [],
                 }
+
+            if project_slug is not None:
+                project_kebab = to_kebab_case(project_slug)
+                if project_kebab != project_slug:
+                    return {
+                        "error": f"project_slug must be kebab-case. Got {project_slug!r}, expected {project_kebab!r}",
+                        "warnings": [],
+                    }
+
+                project_dir = root / "projects" / project_slug
+                if not project_dir.exists():
+                    return {
+                        "error": f"Project {project_slug!r} not found",
+                        "warnings": [],
+                    }
 
             extra: dict[str, Any] = {}
             if title:
@@ -562,10 +583,14 @@ def create_server(root: Path) -> fastmcp.FastMCP:
             path = fs.create_person(
                 slug, name, extra_fields=extra or None, description=description
             )
+            if project_slug is not None:
+                fs.link_person_to_project(slug, project_slug)
+
             return {
                 "result": {
                     "path": fs._rel(path),
                     "message": f"Person {name!r} created",
+                    "linked_project": project_slug,
                 },
                 "warnings": [],
             }
@@ -582,7 +607,11 @@ def create_server(root: Path) -> fastmcp.FastMCP:
         website: Optional[str] = None,
         description: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Create a company file in _global/companies/ and update its _index.yaml."""
+        """Create a company file in _global/companies/ and update its _index.yaml.
+
+        Before creating, check existing entities first with list_global_companies
+        (and optionally list_global_people / resolve_ref) to avoid duplicates.
+        """
         try:
             kebab = to_kebab_case(slug)
             if kebab != slug:

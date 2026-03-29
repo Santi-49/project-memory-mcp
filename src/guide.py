@@ -97,6 +97,7 @@ _SECTION_FS_RULES = """\
 Best practice before mutating existing content:
 - Read current content first (for example get_person, get_company, get_project_context, read_file)
 - Then apply targeted updates to avoid unintentionally overwriting newer notes or fields
+- Before create_person/create_company, check existing entities first (list_global_people/list_global_companies)
 
 Rule                                    Trigger                         Severity
 ──────────────────────────────────────  ──────────────────────────────  ────────
