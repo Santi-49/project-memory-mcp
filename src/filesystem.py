@@ -172,8 +172,8 @@ class MemoryFS:
         return resolved
 
     def _rel(self, abs_path: Path) -> str:
-        """Return path relative to root as a string."""
-        return str(abs_path.relative_to(self.root))
+        """Return path relative to root as a forward-slash string (cross-platform)."""
+        return abs_path.relative_to(self.root).as_posix()
 
     # ------------------------------------------------------------------
     # Root initialisation
@@ -841,6 +841,10 @@ class MemoryFS:
             raise ValueError(f"Company {slug!r} already exists")
 
         content = COMPANY_TEMPLATE.format(name=name)
+        if extra_fields:
+            for field_name, field_value in extra_fields.items():
+                placeholder = f"**{field_name}:** "
+                content = content.replace(placeholder, f"**{field_name}:** {field_value}", 1)
         path.write_text(content, encoding="utf-8")
         self.add_manifest_entry(
             folder,
