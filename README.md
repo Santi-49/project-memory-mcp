@@ -142,6 +142,58 @@ npx @modelcontextprotocol/inspector python src/server.py
 
 ---
 
+## HTTP Transport & Internet Exposure
+
+The server supports an HTTP transport mode for exposing it over the internet (e.g. for remote Claude clients). Bearer-token authentication is required for safe exposure.
+
+### Setup
+
+1. Copy the environment template and set a token:
+   ```bash
+   cp .env.example .env
+   # Generate a strong random token:
+   python -c "import secrets; print(secrets.token_hex(32))"
+   # Paste the result as AUTH_TOKEN in .env
+   ```
+
+2. Start the server in HTTP mode:
+   ```bash
+   python src/server.py --transport http --host 0.0.0.0 --port 8000
+   ```
+   The server prints `[auth] Bearer token auth enabled` when the token is loaded.
+
+3. **Recommended: use a tunnel instead of direct port forwarding.**
+   [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/) provides a secure, zero-config HTTPS tunnel:
+   ```bash
+   # Install cloudflared (once)
+   # https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+
+   # Expose the local HTTP server
+   cloudflared tunnel --url http://localhost:8000
+   ```
+   Cloudflared prints a public `https://…trycloudflare.com` URL. Use that URL in your MCP client config — **no port forwarding or firewall rules required**.
+
+### Connect a remote Claude client
+
+Add to `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "project-memory": {
+      "type": "streamable-http",
+      "url": "https://<your-tunnel-url>/mcp/",
+      "headers": {
+        "Authorization": "Bearer <your-auth-token>"
+      }
+    }
+  }
+}
+```
+
+> **Note:** Only use HTTP transport with a tunnel (cloudflared) or a reverse proxy that terminates TLS. Never expose the plain HTTP port directly to the internet.
+
+---
+
 ## Core Features
 
 ### 1. Structured project memory
