@@ -58,6 +58,7 @@ projects/databuddy/
 ```
 
 **Key innovation:** Every knowledge entry stores **where it came from**:
+
 ```yaml
 source: "[sp:sp-contracts/deployment-reqs.pdf]"  # Points back to SharePoint
 processed: 2026-03-29
@@ -123,6 +124,7 @@ python src/server.py --rag-backend embeddings  # Recommended
 ### 2. Connect to Claude
 
 Add to `claude_desktop_config.json`:
+
 ```json
 {
   "mcpServers": {
@@ -150,6 +152,7 @@ The server supports an HTTP transport mode for exposing it over the internet (e.
 ### Setup
 
 1. Copy the environment template and set a token:
+
    ```bash
    cp .env.example .env
    # Generate a strong random token:
@@ -158,13 +161,17 @@ The server supports an HTTP transport mode for exposing it over the internet (e.
    ```
 
 2. Start the server in HTTP mode:
+  
    ```bash
   python src/server.py --rag-backend embeddings --transport http --host 0.0.0.0 --port 8000
    ```
+
    The server prints `[auth] Bearer token auth enabled` when the token is loaded.
 
-3. **Recommended: use a tunnel instead of direct port forwarding.**
+1. **Recommended: use a tunnel instead of direct port forwarding.**
+
    [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/) provides a secure, zero-config HTTPS tunnel:
+
    ```bash
    # Install cloudflared (once)
    # https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
@@ -172,11 +179,13 @@ The server supports an HTTP transport mode for exposing it over the internet (e.
    # Expose the local HTTP server
    cloudflared tunnel --url http://localhost:8000
    ```
+
    Cloudflared prints a public `https://…trycloudflare.com` URL. Use that URL in your MCP client config — **no port forwarding or firewall rules required**.
 
 ### Connect a remote Claude client
 
 Add to `claude_desktop_config.json`:
+
 ```json
 {
   "mcpServers": {

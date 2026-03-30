@@ -9,7 +9,7 @@ description: >
   guide that are required reading before operating on the memory filesystem.
   Trigger on any user request that involves saving project info, creating project memory,
   updating people/companies, logging knowledge, syncing from M365 sources (SharePoint,
-  Teams, Outlook), or querying the project memory MCP.
+  Teams, Outlook), other MPC tools, or querying the project memory MCP.
 ---
 
 # Project Memory MCP — Required Pre-Flight
